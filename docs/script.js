@@ -168,7 +168,38 @@
   if (!reduceMotion) {
     setInterval(advanceLyrics, 3600);
   }
+/* =========================================================
+   Mesh Player — Slideshow Logic Setup
+   ========================================================= */
+let slideIndex = 0;
+const slides = document.querySelectorAll(".slideshow-container .slide");
+const dots = document.querySelectorAll(".slideshow-dots .s-dot");
 
+function showSlide(index) {
+  if (slides.length === 0) return;
+  
+  // Reset all objects
+  slides.forEach(slide => slide.classList.remove("active"));
+  dots.forEach(dot => dot.classList.remove("active"));
+  
+  // Boundary constraints
+  if (index >= slides.length) slideIndex = 0;
+  if (index < 0) slideIndex = slides.length - 1;
+  
+  slides[slideIndex].classList.add("active");
+  if (dots[slideIndex]) dots[slideIndex].classList.add("active");
+}
+
+function currentSlide(index) {
+  slideIndex = index;
+  showSlide(slideIndex);
+}
+
+// Optional: Automatic rotation cycle every 7 seconds
+setInterval(() => {
+  slideIndex++;
+  showSlide(slideIndex);
+}, 7000);
   /* ---------------------------------------------------------
      Automated Integrated Assets Slideshow (4 Items)
      --------------------------------------------------------- */
