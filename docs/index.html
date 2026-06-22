@@ -8,7 +8,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -180,6 +180,14 @@
         <p>One tap on any row to mark a favorite. They collect automatically into a living playlist — no drag, no drop, no second app.</p>
       </article>
 
+      <article class="feature-card" data-reveal>
+        <div class="feature-card__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" fill="currentColor"/></svg>
+        </div>
+        <h3>100% Native Architecture</h3>
+        <p>Built directly with Swift and SwiftUI for macOS. No bloated Electron frameworks, no heavy memory leaks—just direct system access and instantaneous response times.</p>
+      </article>
+
       <article class="feature-card feature-card--wide" data-reveal>
         <div class="feature-card__icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="22" height="22"><path d="M19 13H5v-2h14v2zm-2-7l1.5 1.5L15 11H9L5.5 7.5 7 6l3 3h4l3-3z" fill="currentColor"/></svg>
@@ -323,37 +331,45 @@
       <div class="slideshow-container" id="screenshotSlideshow">
         <div class="slide active">
           <div class="mock-window">
-            <div class="mock-chrome"><span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span><span class="mock-title mono">Mesh Player — Theater Engine View</span></div>
-            <div class="mock-body mock-body--theater">
-              <div class="hero__art accent-blur-1"></div>
-              <div class="mock-lyrics">
-                <p class="dim">Floating deep inside the spatial mix</p>
-                <p class="bright">Bit-perfect architecture tracking sound</p>
-                <p class="dim">Everything aligned perfectly right here</p>
-              </div>
+            <div class="mock-chrome">
+              <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
+              <span class="mock-title mono">Mesh Player — Theater Mode Sync View</span>
+            </div>
+            <div class="mock-body">
+              <img src="image_9ade69.png" class="mock-screenshot" alt="Mesh Player Theater Mode Layout View">
             </div>
           </div>
         </div>
         <div class="slide">
           <div class="mock-window">
-            <div class="mock-chrome"><span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span><span class="mock-title mono">Mesh Player — Local Library Storage Browser</span></div>
-            <div class="mock-body mock-body--list">
-              <div class="mock-row"><span>Motion Picture Soundtrack</span><span>Radiohead</span><span class="format-tag format-tag--mono">FLAC Lossless</span></div>
-              <div class="mock-row active-row"><span>All Neon Like</span><span>Björk</span><span class="format-tag format-tag--atmos">ATMOS MULTI</span></div>
-              <div class="mock-row"><span>Windowlicker</span><span>Aphex Twin</span><span class="format-tag format-tag--aac">ALAC 24-bit</span></div>
+            <div class="mock-chrome">
+              <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
+              <span class="mock-title mono">Mesh Player — Album Artwork Theater Frame</span>
+            </div>
+            <div class="mock-body">
+              <img src="image_9ade6e.png" class="mock-screenshot" alt="Mesh Player Album Track View">
             </div>
           </div>
         </div>
         <div class="slide">
           <div class="mock-window">
-            <div class="mock-chrome"><span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span><span class="mock-title mono">Mesh Player — Advanced Multi-Channel Routing Grid</span></div>
-            <div class="mock-body mock-body--engine">
-              <div class="hero__art accent-blur-2"></div>
-              <div class="engine-card">
-                <span class="mono">CORE CONFIG LINKED</span>
-                <h3>Direct Multi-Channel Output Operational</h3>
-                <p>Decoding spatial coordinate metrics to physical drivers instantly with zero conversion overhead.</p>
-              </div>
+            <div class="mock-chrome">
+              <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
+              <span class="mock-title mono">Mesh Player — Core Audio Library Interface</span>
+            </div>
+            <div class="mock-body">
+              <img src="image_9ade89.png" class="mock-screenshot" alt="Mesh Player System Track Controls Panel">
+            </div>
+          </div>
+        </div>
+        <div class="slide">
+          <div class="mock-window">
+            <div class="mock-chrome">
+              <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
+              <span class="mock-title mono">Mesh Player — Local Management Client Grid</span>
+            </div>
+            <div class="mock-body">
+              <img src="image_9ade8f.png" class="mock-screenshot" alt="Mesh Player File List Layout View">
             </div>
           </div>
         </div>
@@ -362,6 +378,7 @@
         <span class="s-dot active" data-index="0"></span>
         <span class="s-dot" data-index="1"></span>
         <span class="s-dot" data-index="2"></span>
+        <span class="s-dot" data-index="3"></span>
       </div>
     </div>
   </section>
@@ -369,6 +386,16 @@
 </main>
 
 <footer class="footer">
+  <div class="promo-banner">
+    <div class="promo-banner__icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9v-2h2v2zm0-4H9V7h2v5zm4 4h-2v-5h2v5zm0-6h-2V7h2v2z"/></svg>
+    </div>
+    <div class="promo-banner__text">
+      <span>Need Atmos, Lossless, or AAC files? <strong>Download Apple Music's files!</strong></span>
+    </div>
+    <a href="https://am-dl.pages.dev/" target="_blank" rel="noopener noreferrer" class="btn btn--outline btn--promo">am-dl.pages.dev →</a>
+  </div>
+
   <div class="vibe-disclaimer">
     <div class="vibe-disclaimer__content">
       <p>Mesh Player's code is mostly vibecoded. Even though it's code is vibecoded, a massive amount of personal time, strict blueprinting, and fine-tuning went into building this client from (maybe?) scratch. If you like the app, consider supporting me.</p>
