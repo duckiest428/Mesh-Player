@@ -16,9 +16,7 @@
   const mobileMenu = document.getElementById("navMobile");
 
   const onScroll = () => {
-    if (nav) {
-      nav.classList.toggle("is-scrolled", window.scrollY > 12);
-    }
+    nav.classList.toggle("is-scrolled", window.scrollY > 12);
   };
   onScroll();
   window.addEventListener("scroll", onScroll, { passive: true });
@@ -43,7 +41,7 @@
      Scroll reveal for feature cards / deep-dive visuals
      --------------------------------------------------------- */
   const revealTargets = document.querySelectorAll(
-    "[data-reveal], .slideshow-wrapper"
+    "[data-reveal], .theater__visual, .library__visual"
   );
 
   if (reduceMotion) {
@@ -53,13 +51,14 @@
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
+            // small stagger for cards sharing a row
             const delay = entry.target.dataset.reveal ? Math.random() * 90 : 0;
             setTimeout(() => entry.target.classList.add("is-visible"), delay);
             io.unobserve(entry.target);
           }
         });
       },
-      { threshold: 0.12, rootMargin: "0px 0px -20px 0px" }
+      { threshold: 0.18, rootMargin: "0px 0px -40px 0px" }
     );
     revealTargets.forEach((el) => io.observe(el));
   } else {
@@ -99,6 +98,7 @@
       playToggle.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
       isPlaying ? startScrub() : stopScrub();
     });
+    // initial state: "playing" demo, so show pause icon
     playIcon.innerHTML = ICON_PAUSE;
     playToggle.setAttribute("aria-label", "Pause");
     startScrub();
@@ -133,13 +133,14 @@
 
   const lyricsContainer = document.getElementById("heroLyrics");
   let lyricSetIndex = 0;
-  let lyricLineIndex = 2;
+  let lyricLineIndex = 2; // start mid-set so "current" is visually centered
 
   function renderLyrics() {
     if (!lyricsContainer) return;
     const lines = lyricSets[lyricSetIndex];
     lyricsContainer.innerHTML = "";
 
+    // show: 1 past (hidden on mobile via CSS), current, 1 next
     const order = [
       { idx: lyricLineIndex - 1, state: "past" },
       { idx: lyricLineIndex, state: "current" },
@@ -172,48 +173,47 @@
   }
 
   /* ---------------------------------------------------------
-     Interface Tour Showcase Slideshow Engine
+     Automated Screenshot Slideshow Logic
      --------------------------------------------------------- */
-  let slideIndex = 0;
-  const slides = document.querySelectorAll(".slideshow-container .slide");
-  const dots = document.querySelectorAll(".slideshow-dots .s-dot");
+  const slideshow = document.getElementById("screenshotSlideshow");
+  const dotsContainer = document.getElementById("slideshowDots");
 
-  function showSlide(index) {
-    if (slides.length === 0) return;
-    
-    slides.forEach(slide => slide.classList.remove("active"));
-    dots.forEach(dot => dot.classList.remove("active"));
-    
-    if (index >= slides.length) slideIndex = 0;
-    if (index < 0) slideIndex = slides.length - 1;
-    
-    slides[slideIndex].classList.add("active");
-    if (dots[slideIndex]) dots[slideIndex].classList.add("active");
-  }
+  if (slideshow && dotsContainer) {
+    const slides = slideshow.querySelectorAll(".slide");
+    const dots = dotsContainer.querySelectorAll(".s-dot");
+    let currentSlideIndex = 0;
+    let slideshowInterval = null;
 
-  // Bound to global window context so html attributes can execute it
-  window.currentSlide = function(index) {
-    slideIndex = index;
-    showSlide(slideIndex);
-  };
+    const changeSlide = (nextIndex) => {
+      slides[currentSlideIndex].classList.remove("active");
+      dots[currentSlideIndex].classList.remove("active");
 
-  if (slides.length > 0 && !reduceMotion) {
-    setInterval(() => {
-      slideIndex++;
-      showSlide(slideIndex);
-    }, 8000);
-  }
+      currentSlideIndex = nextIndex;
 
-  /* ---------------------------------------------------------
-     Download buttons mockup handler
-     --------------------------------------------------------- */
-  const downloadBtn = document.getElementById("downloadBtn");
-  const downloadNote = document.getElementById("downloadNote");
+      slides[currentSlideIndex].classList.add("active");
+      dots[currentSlideIndex].classList.add("active");
+    };
 
-  if (downloadBtn && downloadNote) {
-    downloadBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      downloadNote.textContent = "No build linked yet — add your release URL to script.js";
+    const startSlideshow = () => {
+      if (reduceMotion) return;
+      slideshowInterval = setInterval(() => {
+        const nextIndex = (currentSlideIndex + 1) % slides.length;
+        changeSlide(nextIndex);
+      }, 4500); // Transitions automatically every 4.5 seconds
+    };
+
+    // Manual navigation control via indicators
+    dots.forEach((dot) => {
+      dot.addEventListener("click", () => {
+        clearInterval(slideshowInterval);
+        const targetIndex = parseInt(dot.getAttribute("data-index"), 10);
+        if (targetIndex !== currentSlideIndex) {
+          changeSlide(targetIndex);
+        }
+        startSlideshow();
+      });
     });
+
+    startSlideshow();
   }
 })();
