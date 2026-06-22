@@ -279,7 +279,7 @@ ul{ list-style:none; }
 .nav__mobile .btn{ margin-top:14px; width:100%; }
 
 /* ---------------------------------------------------------
-   Hero — live Theater Player recreation
+   Hero
    --------------------------------------------------------- */
 
 .hero{
@@ -477,7 +477,7 @@ ul{ list-style:none; }
 }
 
 /* ---------------------------------------------------------
-   Strip — format support
+   Strip
    --------------------------------------------------------- */
 
 .strip{
@@ -642,36 +642,37 @@ ul{ list-style:none; }
   font-size:0.98rem;
   font-weight:500;
 }
-.theater-window__line--dim">I'm goin' back in</p>
-          <p class="theater-window__line theater-window__line--dim">Let me go back in</p>
-          <p class="theater-window__line theater-window__line--bright">Let me go in, let me go in, let me go in</p>
-          <div class="theater-window__dots"><span></span><span></span><span></span></div>
-        </div>
-        <div class="theater-window__footer mono">
-          <span>DAC CORE CONFIG: DIRECT MULTI-CHANNEL</span>
-          <span>DOLBY ATMOS BINAURAL DECODER</span>
-        </div>
-      </div>
-    </div>
-  </section>
+.theater-window__line--dim{ color:rgba(236,232,226,0.3); }
+.theater-window__line--bright{ color:var(--ink); font-size:1.15rem; }
+.theater-window__dots{ display:flex; gap:6px; margin:6px 0; }
+.theater-window__dots span{ width:6px; height:6px; border-radius:50%; background:rgba(236,232,226,0.35); }
+.theater-window__footer{
+  position:relative; z-index:2;
+  display:flex;
+  justify-content:space-between;
+  padding:12px 18px;
+  font-size:0.6rem;
+  color:var(--ink-faint);
+  background:rgba(0,0,0,0.35);
+  border-top:1px solid var(--line);
+}
 
 /* ---------------------------------------------------------
-   Library section
+   Library section (FIXED LAYOUT GRID)
    --------------------------------------------------------- */
-
-.library{
-  padding:60px 5vw 140px;
-  max-width:1180px;
-  margin:0 auto;
-  display:grid;
-  grid-template-columns: 1.05fr 0.95fr;
-  gap:64px;
-  align-items:center;
+.library {
+  padding: 60px 5vw 140px;
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
 }
 
 .library__visual{
   opacity:0;
   transform: translateY(24px);
+  width: 100%;
 }
 .library__visual.is-visible{ opacity:1; transform:translateY(0); transition: opacity var(--dur-slow) var(--ease), transform var(--dur-slow) var(--ease); }
 
@@ -682,7 +683,6 @@ ul{ list-style:none; }
   background:var(--panel);
   box-shadow: 0 30px 70px -30px rgba(0,0,0,0.6);
 }
-.library__copy{ max-width:480px; }
 
 .lib-window__chrome{ display:flex; gap:7px; padding:14px 16px; border-bottom:1px solid var(--line); }
 .lib-window__body{ display:grid; grid-template-columns: 110px 1fr; min-height:280px; }
@@ -714,10 +714,25 @@ ul{ list-style:none; }
 }
 .lib-row__artist{ font-size:0.8rem; color:var(--ink-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
+/* Fixed Content Grid */
+.library__content-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 40px;
+  align-items: start;
+}
+
+.library__copy {
+  max-width: 100%;
+}
+
 .stat-row{
-  display:flex;
-  gap:40px;
-  margin-top:32px;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  margin-top: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
 }
 .stat{ flex:1; }
 .stat__num{
@@ -1040,7 +1055,9 @@ ul{ list-style:none; }
 @media (max-width: 980px){
   .feature-grid{ grid-template-columns:repeat(2,1fr); }
   .feature-card--wide, .feature-card--full{ grid-column: span 2; }
-  .theater, .library{ grid-template-columns:1fr; gap:40px; }
+  .theater { grid-template-columns:1fr; gap:40px; }
+  .library__content-grid { grid-template-columns:1fr; gap:32px; }
+  .stat-row { border-top: none; padding-top: 0; }
   .theater__visual, .library__visual{ order:-1; }
   .format-cards{ grid-template-columns:1fr; }
   .vibe-disclaimer { flex-direction: column; align-items: flex-start; gap: 18px; padding: 22px; }
