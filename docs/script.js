@@ -51,14 +51,13 @@
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            // small stagger for cards sharing a row
             const delay = entry.target.dataset.reveal ? Math.random() * 90 : 0;
             setTimeout(() => entry.target.classList.add("is-visible"), delay);
             io.unobserve(entry.target);
           }
         });
       },
-      { threshold: 0.18, rootMargin: "0px 0px -40px 0px" }
+      { threshold: 0.15, rootMargin: "0px 0px -40px 0px" }
     );
     revealTargets.forEach((el) => io.observe(el));
   } else {
@@ -98,14 +97,13 @@
       playToggle.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
       isPlaying ? startScrub() : stopScrub();
     });
-    // initial state: "playing" demo, so show pause icon
     playIcon.innerHTML = ICON_PAUSE;
     playToggle.setAttribute("aria-label", "Pause");
     startScrub();
   }
 
   /* ---------------------------------------------------------
-     Hero lyric cycler — simple ring buffer, mimics synced lyrics
+     Hero lyric cycler
      --------------------------------------------------------- */
   const lyricSets = [
     [
@@ -133,14 +131,13 @@
 
   const lyricsContainer = document.getElementById("heroLyrics");
   let lyricSetIndex = 0;
-  let lyricLineIndex = 2; // start mid-set so "current" is visually centered
+  let lyricLineIndex = 2;
 
   function renderLyrics() {
     if (!lyricsContainer) return;
     const lines = lyricSets[lyricSetIndex];
     lyricsContainer.innerHTML = "";
 
-    // show: 1 past (hidden on mobile via CSS), current, 1 next
     const order = [
       { idx: lyricLineIndex - 1, state: "past" },
       { idx: lyricLineIndex, state: "current" },
@@ -173,7 +170,7 @@
   }
 
   /* ---------------------------------------------------------
-     Automated Screenshot Slideshow Logic
+     Automated Integrated Assets Slideshow (4 Items)
      --------------------------------------------------------- */
   const slideshow = document.getElementById("screenshotSlideshow");
   const dotsContainer = document.getElementById("slideshowDots");
@@ -199,10 +196,9 @@
       slideshowInterval = setInterval(() => {
         const nextIndex = (currentSlideIndex + 1) % slides.length;
         changeSlide(nextIndex);
-      }, 4500); // Transitions automatically every 4.5 seconds
+      }, 4500);
     };
 
-    // Manual navigation control via indicators
     dots.forEach((dot) => {
       dot.addEventListener("click", () => {
         clearInterval(slideshowInterval);
