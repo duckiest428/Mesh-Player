@@ -8,7 +8,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -28,13 +28,13 @@
 
     <nav class="nav__links" aria-label="Primary">
       <a href="#features">Features</a>
-      <a href="#theater">Theater Mode</a>
-      <a href="#library">Library</a>
+      <a href="#showcase">Interface Tour</a>
       <a href="#formats">Formats</a>
     </nav>
 
     <div class="nav__cta">
-      <a href="https://github.com/duckiest428/meshmusic/releases/latest" class="btn btn--solid">Get Mesh Player</a>
+      <a href="#download" class="btn btn--ghost">Sign in</a>
+      <a href="#download" class="btn btn--solid">Get Mesh Player</a>
     </div>
 
     <button class="nav__burger" id="navBurger" aria-label="Open menu" aria-expanded="false" aria-controls="navMobile">
@@ -44,10 +44,9 @@
 
   <div class="nav__mobile" id="navMobile">
     <a href="#features">Features</a>
-    <a href="#theater">Theater Mode</a>
-    <a href="#library">Library</a>
+    <a href="#showcase">Interface Tour</a>
     <a href="#formats">Formats</a>
-    <a href="https://github.com/duckiest428/meshmusic/releases/latest" class="btn btn--solid">Get Mesh Player</a>
+    <a href="#download" class="btn btn--solid">Get Mesh Player</a>
   </div>
 </header>
 
@@ -81,8 +80,8 @@
         </p>
 
         <div class="hero__actions">
-          <a href="https://github.com/duckiest428/meshmusic/releases/latest" class="btn btn--solid btn--lg">Download for macOS</a>
-          <a href="#theater" class="btn btn--outline btn--lg">See Theater Mode ↓</a>
+          <a href="#download" class="btn btn--solid btn--lg">Download for macOS</a>
+          <a href="#showcase" class="btn btn--outline btn--lg">See App Tour ↓</a>
         </div>
       </div>
 
@@ -180,14 +179,6 @@
         <p>One tap on any row to mark a favorite. They collect automatically into a living playlist — no drag, no drop, no second app.</p>
       </article>
 
-      <article class="feature-card" data-reveal>
-        <div class="feature-card__icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" fill="currentColor"/></svg>
-        </div>
-        <h3>100% Native Architecture</h3>
-        <p>Built directly with Swift and SwiftUI for macOS. No bloated Electron frameworks, no heavy memory leaks—just direct system access and instantaneous response times.</p>
-      </article>
-
       <article class="feature-card feature-card--wide" data-reveal>
         <div class="feature-card__icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="22" height="22"><path d="M19 13H5v-2h14v2zm-2-7l1.5 1.5L15 11H9L5.5 7.5 7 6l3 3h4l3-3z" fill="currentColor"/></svg>
@@ -199,99 +190,146 @@
     </div>
   </section>
 
-  <section class="theater" id="theater">
-    <div class="theater__copy">
-      <p class="eyebrow mono">Theater Mode</p>
-      <h2 class="section-title">Turn any track into the main event.</h2>
-      <p class="section-sub">
-        One key fills the screen with your album art, blurs it into the background, and floats the
-        lyrics on top — synced to the millisecond, dimmed for what's past and bright for what's now.
-      </p>
-      <ul class="theater__list">
-        <li><strong>Direct Multi-Channel</strong> output engages automatically for Atmos mixes.</li>
-        <li><strong>Binaural decoding</strong> keeps spatial mixes accurate on headphones.</li>
-        <li><strong>Tap anywhere</strong> to bring transport controls back, or let them fade.</li>
-      </ul>
-      <a href="https://github.com/duckiest428/meshmusic/releases/latest" class="btn btn--outline">Try Theater Mode</a>
+  <section class="showcase" id="showcase" data-reveal>
+    <div class="section-head">
+      <p class="eyebrow mono">Interface Tour</p>
+      <h2 class="section-title section-title--center">Every view, crafted with precision.</h2>
+      <p class="section-sub section-sub--center">Take a look inside the application desktop framework without leaving your browser.</p>
     </div>
 
-    <div class="theater__visual" data-reveal>
-      <div class="theater-window">
-        <div class="theater-window__chrome">
-          <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
-        </div>
-        <div class="theater-window__art" aria-hidden="true"></div>
-        <div class="theater-window__overlay">
-          <p class="theater-window__line theater-window__line--dim">I'm goin' back in</p>
-          <p class="theater-window__line theater-window__line--dim">Let me go back in</p>
-          <p class="theater-window__line theater-window__line--bright">Let me go in, let me go in, let me go in</p>
-          <div class="theater-window__dots"><span></span><span></span><span></span></div>
-        </div>
-        <div class="theater-window__footer mono">
-          <span>DAC CORE CONFIG: DIRECT MULTI-CHANNEL</span>
-          <span>DOLBY ATMOS BINAURAL DECODER</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="library" id="library">
-    <div class="library__visual" data-reveal>
-      <div class="lib-window">
-        <div class="lib-window__chrome">
-          <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
-        </div>
-        <div class="lib-window__body">
-          <aside class="lib-window__sidebar mono">
-            <p class="lib-window__sb-label">Library</p>
-            <p class="lib-window__sb-item">Songs</p>
-            <p class="lib-window__sb-item">Albums</p>
-            <p class="lib-window__sb-item">Artists</p>
-            <p class="lib-window__sb-item lib-window__sb-item--active">Genres</p>
-          </aside>
-          <div class="lib-window__rows">
-            <div class="lib-row">
-              <span class="lib-row__title">Around the World</span>
-              <span class="lib-row__artist">Daft Punk</span>
-              <span class="format-tag format-tag--aac">AAC 256</span>
+    <div class="slideshow-wrapper">
+      <div class="slideshow-container">
+        
+        <div class="slide active">
+          <div class="mock-window">
+            <div class="mock-chrome">
+              <span class="dot dot--r"></span>
+              <span class="dot dot--y"></span>
+              <span class="dot dot--g"></span>
+              <span class="mock-title mono">Mesh Player — Theater Mode</span>
             </div>
-            <div class="lib-row">
-              <span class="lib-row__title">Da Funk</span>
-              <span class="lib-row__artist">Daft Punk</span>
-              <span class="format-tag format-tag--aac">AAC 256</span>
-            </div>
-            <div class="lib-row lib-row--playing">
-              <span class="lib-row__title">Something About Us</span>
-              <span class="lib-row__artist">Daft Punk</span>
-              <span class="format-tag format-tag--aac">AAC 320</span>
-            </div>
-            <div class="lib-row">
-              <span class="lib-row__title">Veridis Quo</span>
-              <span class="lib-row__artist">Daft Punk</span>
-              <span class="format-tag format-tag--atmos">ATMOS</span>
+            <div class="mock-body slide-ui-theater">
+              <div class="ui-glow glow-1"></div>
+              <div class="ui-glow glow-2"></div>
+              
+              <div class="ui-theater-content">
+                <div class="ui-badge-row">
+                  <span class="badge badge--atmos">ATMOS</span>
+                  <span class="mono ui-caption">Spatial Audio Deck</span>
+                </div>
+                
+                <h3 class="ui-display-title">Your library,<br>in <span class="hero__title-accent">full fidelity.</span></h3>
+                
+                <div class="ui-lyric-box">
+                  <p class="ui-lyric-line past">Pulling the waveform in</p>
+                  <p class="ui-lyric-line current">Every format, every mix, decoded right</p>
+                  <p class="ui-lyric-line next">Nothing lost between the studio and you</p>
+                </div>
+                
+                <div class="ui-transport-dock">
+                  <div class="ui-track-info">
+                    <div class="ui-album-art"></div>
+                    <div class="ui-metadata">
+                      <p class="ui-track-title">Full Fidelity</p>
+                      <p class="ui-track-artist">Mesh Player — Demo Track</p>
+                    </div>
+                  </div>
+                  
+                  <div class="ui-scrub-system">
+                    <span class="ui-time">1:42</span>
+                    <div class="ui-progress-bar"><div class="ui-progress-fill"></div></div>
+                    <span class="ui-time">−2:11</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+          
+          <div class="slide-caption">
+            <h4 class="mono">Theater Mode Stage</h4>
+            <p>One key fills the screen with your album art, blurs it into the background, and floats the lyrics on top — synced to the millisecond, dimmed for what's past and bright for what's now.</p>
+          </div>
         </div>
-      </div>
-    </div>
 
-    <div class="library__copy">
-      <p class="eyebrow mono">Library Engine</p>
-      <h2 class="section-title">Drop in a folder. Walk away. Done.</h2>
-      <p class="section-sub">
-        Mesh Player reads your existing Music or Downloads folder directly — no re-encoding,
-        no proprietary catalog. Genres, artists, and albums populate themselves, sorted exactly
-        the way the sidebar shows them above.
-      </p>
-      <div class="stat-row">
-        <div class="stat">
-          <p class="stat__num mono">&infin;</p>
-          <p class="stat__label">tracks scanned in one pass, instantly</p>
+        <div class="slide">
+          <div class="mock-window">
+            <div class="mock-chrome">
+              <span class="dot dot--r"></span>
+              <span class="dot dot--y"></span>
+              <span class="dot dot--g"></span>
+              <span class="mock-title mono">Mesh Player — Local Library</span>
+            </div>
+            <div class="mock-body slide-ui-library">
+              <aside class="ui-sidebar">
+                <p class="ui-sb-heading mono">Library</p>
+                <ul class="ui-sb-list">
+                  <li class="ui-sb-item active">✨ Now Playing</li>
+                  <li class="ui-sb-item">🎵 All Tracks</li>
+                  <li class="ui-sb-item">💿 Albums</li>
+                  <li class="ui-sb-item">👤 Artists</li>
+                </ul>
+                <p class="ui-sb-heading mono" style="margin-top:24px;">Directories</p>
+                <ul class="ui-sb-list">
+                  <li class="ui-sb-item">📁 /Music/Hi-Res</li>
+                  <li class="ui-sb-item">📁 /Downloads</li>
+                </ul>
+              </aside>
+              
+              <main class="ui-lib-main">
+                <div class="ui-lib-header">
+                  <h3 class="mono">Imported Audio Database</h3>
+                  <span class="format-tag format-tag--mono">Live Sync Active</span>
+                </div>
+                
+                <div class="ui-table">
+                  <div class="ui-table-row playing">
+                    <div class="ui-col-main">
+                      <span class="ui-playing-eq"></span>
+                      <div>
+                        <p class="ui-row-title gradient-text">Kind of Blue</p>
+                        <p class="ui-row-subtitle">Miles Davis</p>
+                      </div>
+                    </div>
+                    <span class="format-tag format-tag--atmos">96kHz FLAC</span>
+                  </div>
+                  
+                  <div class="ui-table-row">
+                    <div class="ui-col-main">
+                      <div class="ui-row-spacer"></div>
+                      <div>
+                        <p class="ui-row-title">A Love Supreme</p>
+                        <p class="ui-row-subtitle">John Coltrane</p>
+                      </div>
+                    </div>
+                    <span class="format-tag format-tag--aac">192kHz ALAC</span>
+                  </div>
+
+                  <div class="ui-table-row">
+                    <div class="ui-col-main">
+                      <div class="ui-row-spacer"></div>
+                      <div>
+                        <p class="ui-row-title">Time Out</p>
+                        <p class="ui-row-subtitle">The Dave Brubeck Quartet</p>
+                      </div>
+                    </div>
+                    <span class="format-tag format-tag--aac">DSD 64</span>
+                  </div>
+                </div>
+              </main>
+            </div>
+          </div>
+          
+          <div class="slide-caption">
+            <h4 class="mono">Library Core Engine</h4>
+            <p>Mesh Player reads your folder directly without rebuilding databases or re-encoding. Genres, tracks, and metadata populate instantly with smart background file watchers.</p>
+          </div>
         </div>
-        <div class="stat">
-          <p class="stat__num mono">7</p>
-          <p class="stat__label">supported formats, zero conversion</p>
-        </div>
+
+      </div>
+      
+      <div class="slideshow-dots">
+        <span class="s-dot active" onclick="currentSlide(0)"></span>
+        <span class="s-dot" onclick="currentSlide(1)"></span>
       </div>
     </div>
   </section>
@@ -317,168 +355,20 @@
 
   <section class="cta" id="download">
     <div class="cta__inner">
-      <p class="eyebrow mono">Free for life</p>
+      <p class="eyebrow mono">Free during beta</p>
       <h2 class="cta__title">Bring your library back to life.</h2>
       <p class="cta__sub">macOS 13 or later. Point it at a folder and you're listening in under a minute.</p>
       <div class="hero__actions hero__actions--center">
-        <a href="https://github.com/duckiest428/meshmusic/releases/latest" class="btn btn--solid btn--lg">Download for macOS</a>
-        <a href="https://github.com/duckiest428/meshmusic" class="btn btn--ghost btn--lg">View on GitHub</a>
+        <a href="#" class="btn btn--solid btn--lg" id="downloadBtn">Download for macOS</a>
+        <a href="#" class="btn btn--ghost btn--lg">View on GitHub</a>
       </div>
       <p class="mono cta__note" id="downloadNote">Version 1.0 · Apple Silicon &amp; Intel</p>
     </div>
-
- <div class="slideshow-wrapper">
-  <div class="slideshow-container">
-    
-    <div class="slide active">
-      <div class="mock-window">
-        <div class="mock-chrome">
-          <span class="dot dot--r"></span>
-          <span class="dot dot--y"></span>
-          <span class="dot dot--g"></span>
-          <span class="mock-title mono">Mesh Player — Theater Mode</span>
-        </div>
-        <div class="mock-body slide-ui-theater">
-          <div class="ui-glow glow-1"></div>
-          <div class="ui-glow glow-2"></div>
-          
-          <div class="ui-theater-content">
-            <div class="ui-badge-row">
-              <span class="badge badge--atmos">ATMOS</span>
-              <span class="mono ui-caption">Spatial Audio Deck</span>
-            </div>
-            
-            <h2 class="ui-display-title">Your library,<br>in <span class="hero__title-accent">full fidelity.</span></h2>
-            
-            <div class="ui-lyric-box">
-              <p class="ui-lyric-line past">Pulling the waveform in</p>
-              <p class="ui-lyric-line current">Every format, every mix, decoded right</p>
-              <p class="ui-lyric-line next">Nothing lost between the studio and you</p>
-            </div>
-            
-            <div class="ui-transport-dock">
-              <div class="ui-track-info">
-                <div class="ui-album-art"></div>
-                <div class="ui-metadata">
-                  <p class="ui-track-title">Full Fidelity</p>
-                  <p class="ui-track-artist">Mesh Player — Demo Track</p>
-                </div>
-              </div>
-              
-              <div class="ui-scrub-system">
-                <span class="ui-time">1:42</span>
-                <div class="ui-progress-bar"><div class="ui-progress-fill"></div></div>
-                <span class="ui-time">−2:11</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="slide">
-      <div class="mock-window">
-        <div class="mock-chrome">
-          <span class="dot dot--r"></span>
-          <span class="dot dot--y"></span>
-          <span class="dot dot--g"></span>
-          <span class="mock-title mono">Mesh Player — Local Library</span>
-        </div>
-        <div class="mock-body slide-ui-library">
-          <aside class="ui-sidebar">
-            <p class="ui-sb-heading mono">Library</p>
-            <ul class="ui-sb-list">
-              <li class="ui-sb-item active">✨ Now Playing</li>
-              <li class="ui-sb-item">🎵 All Tracks</li>
-              <li class="ui-sb-item">💿 Albums</li>
-              <li class="ui-sb-item">👤 Artists</li>
-            </ul>
-            <p class="ui-sb-heading mono" style="margin-top:24px;">Directories</p>
-            <ul class="ui-sb-list">
-              <li class="ui-sb-item">📁 /Music/Hi-Res</li>
-              <li class="ui-sb-item">📁 /Downloads/Inbound</li>
-            </ul>
-          </aside>
-          
-          <main class="ui-lib-main">
-            <div class="ui-lib-header">
-              <h3 class="mono">Imported Audio Database</h3>
-              <span class="format-tag format-tag--mono">Live Sync Active</span>
-            </div>
-            
-            <div class="ui-table">
-              <div class="ui-table-row playing">
-                <div class="ui-col-main">
-                  <span class="ui-playing-eq"></span>
-                  <div>
-                    <p class="ui-row-title gradient-text">Kind of Blue</p>
-                    <p class="ui-row-subtitle">Miles Davis</p>
-                  </div>
-                </div>
-                <span class="format-tag format-tag--atmos">96kHz FLAC</span>
-              </div>
-              
-              <div class="ui-table-row">
-                <div class="ui-col-main">
-                  <div class="ui-row-spacer"></div>
-                  <div>
-                    <p class="ui-row-title">A Love Supreme</p>
-                    <p class="ui-row-subtitle">John Coltrane</p>
-                  </div>
-                </div>
-                <span class="format-tag format-tag--aac">192kHz ALAC</span>
-              </div>
-
-              <div class="ui-table-row">
-                <div class="ui-col-main">
-                  <div class="ui-row-spacer"></div>
-                  <div>
-                    <p class="ui-row-title">Time Out</p>
-                    <p class="ui-row-subtitle">The Dave Brubeck Quartet</p>
-                  </div>
-                </div>
-                <span class="format-tag format-tag--aac">DSD 64</span>
-              </div>
-            </div>
-          </main>
-        </div>
-      </div>
-    </div>
-
-  </div>
-  
-  <div class="slideshow-dots">
-    <span class="s-dot active" onclick="currentSlide(0)"></span>
-    <span class="s-dot" onclick="currentSlide(1)"></span>
-  </div>
-</div>
   </section>
 
 </main>
 
 <footer class="footer">
-  <div class="promo-banner">
-    <div class="promo-banner__icon" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9v-2h2v2zm0-4H9V7h2v5zm4 4h-2v-5h2v5zm0-6h-2V7h2v2z"/></svg>
-    </div>
-    <div class="promo-banner__text">
-      <span>Need Atmos, Lossless, or AAC files? <strong>Download Apple Music's files!</strong></span>
-    </div>
-    <a href="https://am-dl.pages.dev/" target="_blank" rel="noopener noreferrer" class="btn btn--outline btn--promo">am-dl.pages.dev →</a>
-  </div>
-
-  <div class="vibe-disclaimer">
-    <div class="vibe-disclaimer__content">
-      <p>Mesh Player's code is mostly vibecoded. Even though it's code is vibecoded, a massive amount of personal time, strict blueprinting, and fine-tuning went into building this client from (maybe?) scratch. If you like the app, consider supporting me.</p>
-    </div>
-    <div class="vibe-disclaimer__action">
-      <a href="https://buymeacoffee.com/petey1" target="_blank" rel="noopener noreferrer" class="btn btn--outline btn--coffee">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="margin-right:4px;"><path d="M2 21h18v-2H2v2zM20 8h-2V5h2v3zm2-5H4v13h14l4-4V3zm-4 7H6V5h12v5z"/></svg>
-        Support the Project
-      </a>
-    </div>
-  </div>
-
   <div class="footer__inner">
     <a href="#top" class="nav__brand nav__brand--footer">
       <span class="nav__mark" aria-hidden="true">
@@ -492,8 +382,8 @@
     <p class="footer__copy mono">© 2026 Mesh Player. Not affiliated with Apple Inc.</p>
     <div class="footer__links">
       <a href="#features">Features</a>
-      <a href="#theater">Theater Mode</a>
-      <a href="https://github.com/duckiest428/meshmusic/releases/latest">Download</a>
+      <a href="#showcase">Interface Tour</a>
+      <a href="#download">Download</a>
     </div>
   </div>
 </footer>
