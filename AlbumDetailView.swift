@@ -1,13 +1,5 @@
 //
 //  AlbumDetailView.swift
-//  AtmosAMPlayer
-//
-//  Created by Peter Luedtke on 2026-06-22.
-//
-
-
-//
-//  AlbumDetailView.swift
 //  macOS Music Player
 //
 //  Created for Xcode Native Compile on 2026-06-22.
@@ -38,13 +30,16 @@ struct AlbumDetailView: View {
     }
     
     var hasLossless: Bool {
-        albumTracks.contains(where: { 
+        albumTracks.contains(where: {
             let fmt = $0.format.lowercased()
             return fmt.contains("lossless") || fmt.contains("alac") || fmt.contains("flac") || fmt.contains("wav")
         })
     }
     
     var kbpsTag: String? {
+        if hasAtmos {
+            return nil
+        }
         for track in albumTracks {
             let fmt = track.format
             // Match numbers followed by kbps (e.g. 1411kbps, 320kbps)
@@ -75,20 +70,7 @@ struct AlbumDetailView: View {
         return "℗ \(year) \(artist) Records LLC, licensed under native CoreAudio pipeline."
     }
     
-    // Editorial Review notes foundation
-    var editorNotes: String {
-        switch albumName {
-        case "Floating Coordinates":
-            return "With Floating Coordinates, Heliosphere creates a masterclass in cosmic ambient spaces. Every sound object is mapped to a spherical trajectory, fully taking advantage of Dolby Atmos multichannel audio mapping. Synthesizer washes swell and morph with deliberate guidance, creating a perfect safe-haven of sonic meditation designed for professional monitoring."
-        case "Corner Table Jazz":
-            return "Captured in a single afternoon session inside Tokyo's prestigious Aoyama sound room, Corner Table Jazz showcases the Luna Lounge Trio at their peak spatial separation. Recorded with absolute phase alignment, the acoustic bass feels heavy and real on the bottom-end, while the drums are placed wide in the stereo field – giving listeners an intimate table-side experience."
-        case "Arcade Odyssey":
-            return "Tokyo Synth Syndicate returns with a hyper-stylized digital love letter to the early coin-op days. Infused with dense spatial arpeggios, heavy side-chain compression, and 24-bit/48kHz native master files, Arcade Odyssey is a high-speed synthesizer flight that represents the golden era of lossless retro wave."
-        default:
-            return "An outstanding collection presenting high-fidelity spatial details. Dynamically detected sample-rates allow for high kbps audio replication, optimized directly for Direct Multi-Channel transmission on compatible CoreAudio systems."
-        }
-    }
-    
+
     var body: some View {
         ScrollView {
             HStack(alignment: .top, spacing: 32) {
@@ -126,7 +108,7 @@ struct AlbumDetailView: View {
                     
                     // 2. Audio Quality Tags
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("AUDIO QUALITY")
+                        Text("TAGS")
                             .font(.system(size: 8, weight: .bold))
                             .foregroundColor(state.theme.textSecondary.opacity(0.7))
                             .tracking(1.2)
@@ -142,17 +124,7 @@ struct AlbumDetailView: View {
                                 .cornerRadius(4)
                             
                             if hasAtmos {
-                                HStack(spacing: 3) {
-                                    Image(systemName: "sparkles")
-                                        .font(.system(size: 8))
-                                    Text("Dolby Atmos")
-                                }
-                                .font(.system(size: 9.5, weight: .bold))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.blue.opacity(0.12))
-                                .foregroundColor(.blue)
-                                .cornerRadius(4)
+                                DolbyAtmosBadge(color: .blue, scale: 0.85, showText: true)
                             }
                             
                             if hasLossless {
@@ -176,28 +148,6 @@ struct AlbumDetailView: View {
                             }
                         }
                     }
-                    
-                    Divider()
-                        .background(state.theme.textSecondary.opacity(0.1))
-                    
-                    // 3. Editor Notes
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "quote.bubble.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(state.theme.accent)
-                            Text("EDITOR'S NOTES")
-                                .font(.system(size: 9, weight: .heavy))
-                                .foregroundColor(state.theme.accent)
-                                .tracking(1.2)
-                        }
-                        
-                        Text(editorNotes)
-                            .font(.system(size: 11.5))
-                            .foregroundColor(state.theme.textPrimary.opacity(0.8))
-                            .lineSpacing(5)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
                 .frame(width: 190)
                 
@@ -210,9 +160,18 @@ struct AlbumDetailView: View {
                             .font(.system(size: 28, weight: .black, design: .rounded))
                             .foregroundColor(state.theme.textPrimary)
                         
-                        Text(representative?.artist ?? "Unknown Artist")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(state.theme.accent)
+                        Button(action: {
+                            if let artist = representative?.artist {
+                                state.selectedTab = "artists"
+                                state.activeFilterType = "artist"
+                                state.activeFilterValue = artist
+                            }
+                        }) {
+                            Text(representative?.artist ?? "Unknown Artist")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(state.theme.accent)
+                        }
+                        .buttonStyle(.plain)
                         
                         Text("Album • \(representative?.genre ?? "Alternative") • \(totalDurationText)")
                             .font(.system(size: 11, weight: .semibold))
@@ -292,28 +251,40 @@ struct AlbumDetailView: View {
                                             .foregroundColor(isPlaying ? state.theme.accent : state.theme.textPrimary)
                                         
                                         if track.isAtmos {
-                                            Text("Atmos")
-                                                .font(.system(size: 7, weight: .black))
-                                                .padding(.horizontal, 3.5)
-                                                .padding(.vertical, 1)
-                                                .background(Color.blue.opacity(0.15))
-                                                .foregroundColor(.blue)
-                                                .cornerRadius(3)
+                                            DolbyAtmosBadge(color: .blue, scale: 0.7, showText: false)
                                         }
                                     }
                                     
-                                    Text(track.artist)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(state.theme.textSecondary)
+                                    Button(action: {
+                                        state.selectedTab = "artists"
+                                        state.activeFilterType = "artist"
+                                        state.activeFilterValue = track.artist
+                                    }) {
+                                        Text(track.artist)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(state.theme.textSecondary)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                                 
                                 Spacer()
                                 
                                 // Format Spec label
-                                Text(track.format)
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundColor(state.theme.textSecondary.opacity(0.45))
-                                    .padding(.trailing, 10)
+                                if track.isAtmos {
+                                    Text("Spatial Audio")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.12))
+                                        .foregroundColor(.blue)
+                                        .cornerRadius(4)
+                                        .padding(.trailing, 10)
+                                } else {
+                                    Text(track.format)
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundColor(state.theme.textSecondary.opacity(0.45))
+                                        .padding(.trailing, 10)
+                                }
                                 
                                 // Duration
                                 Text(formatTime(track.duration))
