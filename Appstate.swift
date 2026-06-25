@@ -62,12 +62,23 @@ struct LocalGenre: Identifiable, Hashable {
 }
 
 struct SyncedLyricLine: Identifiable, Equatable, Hashable {
-    let id: UUID = UUID()
+    let id: UUID
     let timestamp: TimeInterval
     let text: String
-    var isBreak: Bool = false
-    var breakStart: TimeInterval = 0.0
-    var breakEnd: TimeInterval = 0.0
+    var isBreak: Bool
+    var breakStart: TimeInterval
+    var breakEnd: TimeInterval
+    var endTime: TimeInterval
+    
+    init(id: UUID = UUID(), timestamp: TimeInterval, text: String, isBreak: Bool = false, breakStart: TimeInterval = 0.0, breakEnd: TimeInterval = 0.0, endTime: TimeInterval = 0.0) {
+        self.id = id
+        self.timestamp = timestamp
+        self.text = text
+        self.isBreak = isBreak
+        self.breakStart = breakStart
+        self.breakEnd = breakEnd
+        self.endTime = endTime
+    }
 }
 
 // MARK: - Themes Structure
@@ -101,6 +112,7 @@ class AppStateManager: ObservableObject {
     @Published var selectedTrackId: UUID? = nil
     @Published var activeFilterType: String? = nil
     @Published var activeFilterValue: String? = nil
+    @Published var isShuffleActive: Bool = false
     
     // Core settings mapped from user preferences settings panel
     @Published var currentThemeName: String = "Space Gray"
@@ -179,78 +191,7 @@ class AppStateManager: ObservableObject {
         Playlist(name: "Favorites (Apple Music)", description: "Imported from Apple Music App preferences", isImported: true, tracks: [])
     ]
     
-    @Published var tracks: [LocalTrack] = [
-        LocalTrack(
-            title: "Ambient Horizon (Atmos)",
-            artist: "Heliosphere",
-            album: "Floating Coordinates",
-            genre: "Ambient",
-            duration: 372,
-            coverImageName: "globe.americas.fill",
-            localCoverURL: nil,
-            dateAdded: Date().addingTimeInterval(-86400 * 5),
-            isAtmos: true,
-            fileSize: "14.2 MB",
-            lyrics: """
-            [00:03.000] (Instrumental Intro)
-            [00:10.000] Floating in the cosmic sea
-            [00:18.000] Stars align for you and me
-            [00:26.000] Dolby Atmos spatial dome
-            [00:35.000] Infinite acoustic home
-            [00:45.000] Resonating far and wide
-            [00:54.000] Riding on the solar tide
-            """,
-            isFavorite: true,
-            playCount: 15420,
-            format: "Atmos"
-        ),
-        LocalTrack(
-            title: "Midnight Breeze",
-            artist: "Luna Lounge Trio",
-            album: "Corner Table Jazz",
-            genre: "Jazz",
-            duration: 425,
-            coverImageName: "music.note",
-            localCoverURL: nil,
-            dateAdded: Date(),
-            isAtmos: false,
-            fileSize: "28.5 MB",
-            lyrics: """
-            [00:04.000] Rain is drumming on the window
-            [00:10.000] Coffee sits quiet and still
-            [00:18.000] Midnight breeze begins to blow
-            [00:25.000] Chasing shadows down the hill
-            [00:34.000] Smoke rings rise towards the ceiling
-            [00:42.000] Bringing back a peaceful feeling
-            """,
-            isFavorite: false,
-            playCount: 9241,
-            format: "ALAC 262kbps"
-        ),
-        LocalTrack(
-            title: "Stellar Drift",
-            artist: "Tokyo Synth Syndicate",
-            album: "Arcade Odyssey",
-            genre: "Synthwave",
-            duration: 322,
-            coverImageName: "sparkles",
-            localCoverURL: nil,
-            dateAdded: Date().addingTimeInterval(-86400 * 12),
-            isAtmos: true,
-            fileSize: "12.8 MB",
-            lyrics: """
-            [00:03.000] Neon grids and spatial arrays
-            [00:08.000] Travelling back to eighties days
-            [00:16.000] Synthetic pulse in stereo
-            [00:23.000] Ready for the spatial show
-            [00:31.000] Gridlines flow beneath our feet
-            [00:39.000] Feel the driving custom beat
-            """,
-            isFavorite: true,
-            playCount: 18765,
-            format: "Atmos"
-        )
-    ]
+    @Published var tracks: [LocalTrack] = []
     
     func toggleFavorite(track: LocalTrack) {
         if let idx = tracks.firstIndex(where: { $0.id == track.id }) {
@@ -409,3 +350,47 @@ struct InstrumentalBreakDots: View {
         .opacity(containerOpacity)
     }
 }
+
+struct DolbyAtmosBadge: View {
+    var color: Color = .white
+    var scale: CGFloat = 1.0
+    var showText: Bool = true
+    
+    var body: some View {
+        HStack(spacing: 5 * scale) {
+            // Re-usable official Dolby symbol using high-precision path drawing
+            HStack(spacing: 1.5 * scale) {
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addArc(center: CGPoint(x: 0, y: 4 * scale), radius: 4 * scale, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
+                    path.addLine(to: CGPoint(x: 0, y: 0))
+                    path.closeSubpath()
+                }
+                .fill(color)
+                .frame(width: 4 * scale, height: 8 * scale)
+                
+                Path { path in
+                    path.move(to: CGPoint(x: 4 * scale, y: 0))
+                    path.addArc(center: CGPoint(x: 4 * scale, y: 4 * scale), radius: 4 * scale, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
+                    path.addLine(to: CGPoint(x: 4 * scale, y: 0))
+                    path.closeSubpath()
+                }
+                .fill(color)
+                .frame(width: 4 * scale, height: 8 * scale)
+            }
+            .frame(width: 9 * scale, height: 8 * scale)
+            
+            if showText {
+                Text("ATMOS")
+                    .font(.system(size: 8.5 * scale, weight: .black, design: .default))
+                    .tracking(1.5 * scale)
+                    .foregroundColor(color)
+            }
+        }
+        .padding(.horizontal, 6 * scale)
+        .padding(.vertical, 3 * scale)
+        .background(color.opacity(0.12))
+        .cornerRadius(4 * scale)
+    }
+}
+
