@@ -52,6 +52,11 @@ struct SidebarView: View {
                     NavigationLink(value: "playlist-\(playlist.id.uuidString)") {
                         Label(playlist.name, systemImage: "music.note.house")
                     }
+                    .contextMenu {
+                        Button("Delete Playlist") {
+                            state.deletePlaylist(playlist.id)
+                        }
+                    }
                 }
             }
             
@@ -282,7 +287,7 @@ struct SidebarView: View {
                         }
                         
                         // Scan for companion .lrc or .txt lyrics file (with the same name as the song) or any .lrc file in that folder
-                        var lyricsContent = "[00:01.000] (Instrumental Intro)\\n[00:08.000] Dolby Atmos spatial tracking active\\n[00:15.000] Fully virtualized surround output"
+                        var lyricsContent = ""
                         
                         // Check standard id3/m4a lyrics tag first
                         for item in asset.metadata {
@@ -323,6 +328,15 @@ struct SidebarView: View {
                             }
                         }
                         
+                        var fileDateAdded = Date()
+                        if let attrs = try? fileManager.attributesOfItem(atPath: fileURL.path) {
+                            if let creationDate = attrs[.creationDate] as? Date {
+                                fileDateAdded = creationDate
+                            } else if let modificationDate = attrs[.modificationDate] as? Date {
+                                fileDateAdded = modificationDate
+                            }
+                        }
+                        
                         let track = LocalTrack(
                             title: finalTitle,
                             artist: finalArtist,
@@ -333,11 +347,12 @@ struct SidebarView: View {
                             coverImageName: isAtmos ? "sparkles" : "music.note",
                             localCoverURL: coverURL,
                             embeddedArtData: embeddedArtworkData,
-                            dateAdded: Date(),
+                            dateAdded: fileDateAdded,
                             isAtmos: isAtmos,
                             fileSize: fileSizeString,
                             lyrics: lyricsContent,
                             isFavorite: false,
+                            playCount: 0,
                             format: formatStr
                         )
                         importedTracks.append(track)
@@ -350,10 +365,12 @@ struct SidebarView: View {
         
         DispatchQueue.main.async {
             if !importedTracks.isEmpty {
-                // Add scanning output to state
-                self.state.tracks = importedTracks + self.state.tracks
+                // Add scanning output to state, filtering out duplicates
+                for track in importedTracks {
+                    self.state.upsertTrack(track)
+                }
                 
-                print("Successfully imported \(importedTracks.count) songs from selected folder!")
+                print("Successfully processed \(importedTracks.count) songs from selected folder!")
             }
         }
     }
@@ -482,13 +499,12 @@ struct QueueSidebarView: View {
     
     var upcomingTracks: [LocalTrack] {
         guard let currentTrack = engine.currentTrack else { return [] }
-        guard let currentIndex = state.tracks.firstIndex(where: { $0.id == currentTrack.id }) else { return [] }
-        if state.tracks.count <= 1 { return [] }
+        guard let currentIndex = state.activeQueue.firstIndex(where: { $0.id == currentTrack.id }) else { return [] }
+        if state.activeQueue.count <= 1 { return [] }
         
         var sorted: [LocalTrack] = []
-        for i in 1..<state.tracks.count {
-            let idx = (currentIndex + i) % state.tracks.count
-            sorted.append(state.tracks[idx])
+        for i in (currentIndex + 1)..<state.activeQueue.count {
+            sorted.append(state.activeQueue[i])
         }
         return sorted
     }
@@ -505,35 +521,7 @@ struct QueueSidebarView: View {
                         .font(.system(size: 13, weight: .black))
                         .foregroundColor(state.theme.textPrimary)
                 }
-                
                 Spacer()
-                
-                if !upcomingTracks.isEmpty {
-                    Button(action: {
-                        if let currentTrack = engine.currentTrack, let idx = state.tracks.firstIndex(where: { $0.id == currentTrack.id }) {
-                            var newTracks = state.tracks
-                            let current = newTracks.remove(at: idx)
-                            newTracks.shuffle()
-                            newTracks.insert(current, at: 0)
-                            state.tracks = newTracks
-                        } else {
-                            state.tracks.shuffle()
-                        }
-                        #if os(macOS)
-                        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
-                        #endif
-                    }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "shuffle")
-                                .font(.system(size: 10))
-                            Text("Shuffle Remaining")
-                                .font(.system(size: 9, weight: .bold))
-                        }
-                        .foregroundColor(state.theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Shuffles remaining queue track sequences")
-                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
