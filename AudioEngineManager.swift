@@ -9,6 +9,7 @@
 import SwiftUI
 import Combine
 import AVFoundation
+import MediaPlayer
 
 class AudioEngineManager: ObservableObject {
     @Published var isPlaying: Bool = false
@@ -44,8 +45,13 @@ class AudioEngineManager: ObservableObject {
     private var timeObserverToken: Any?
     private var visualizerTimer: Timer?
     
+    // Handlers for remote commands
+    var onPlayNext: (() -> Void)?
+    var onPlayPrevious: (() -> Void)?
+    
     init() {
         setupDeviceRouting()
+        setupRemoteCommandCenter()
     }
     
     private func setupDeviceRouting() {
@@ -114,9 +120,59 @@ class AudioEngineManager: ObservableObject {
         #endif
     }
     
+    private func setupRemoteCommandCenter() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+        
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.playCommand.addTarget { [weak self] event in
+            guard let self = self else { return .commandFailed }
+            if !self.isPlaying {
+                self.togglePlayPause()
+                return .success
+            }
+            return .commandFailed
+        }
+        
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.pauseCommand.addTarget { [weak self] event in
+            guard let self = self else { return .commandFailed }
+            if self.isPlaying {
+                self.togglePlayPause()
+                return .success
+            }
+            return .commandFailed
+        }
+        
+        commandCenter.togglePlayPauseCommand.isEnabled = true
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] event in
+            guard let self = self else { return .commandFailed }
+            self.togglePlayPause()
+            return .success
+        }
+        
+        commandCenter.nextTrackCommand.isEnabled = true
+        commandCenter.nextTrackCommand.addTarget { [weak self] event in
+            guard let self = self else { return .commandFailed }
+            self.onPlayNext?()
+            return .success
+        }
+        
+        commandCenter.previousTrackCommand.isEnabled = true
+        commandCenter.previousTrackCommand.addTarget { [weak self] event in
+            guard let self = self else { return .commandFailed }
+            self.onPlayPrevious?()
+            return .success
+        }
+    }
+    
+    private func updateNowPlayingInfo() {
+        SystemMediaManager.shared.updateNowPlayingInfo(track: currentTrack, isPlaying: isPlaying, currentTime: currentTime)
+    }
+    
     func playTrack(_ track: LocalTrack) {
         // Clean up any active observers from the previous track
         removeTimeObserver()
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem)
         
         self.currentTrack = track
         self.duration = track.duration
@@ -179,6 +235,16 @@ class AudioEngineManager: ObservableObject {
             
             // Initialize player with the newly mapped spatial asset configuration
             self.player = AVPlayer(playerItem: playerItem)
+            
+            // Add completion lifecycle hook (Song End Tracking)
+            NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main) { [weak self] _ in
+                guard let self = self else { return }
+                self.isPlaying = false
+                self.stopVisualizerTimer()
+                self.updateNowPlayingInfo()
+                self.onPlayNext?()
+            }
+            
             self.player?.volume = volume
             self.player?.play()
             
@@ -191,6 +257,8 @@ class AudioEngineManager: ObservableObject {
             startTimeObservers()
             startVisualizerTimer()
         }
+        
+        updateNowPlayingInfo()
     }
     
     func togglePlayPause() {
@@ -203,6 +271,7 @@ class AudioEngineManager: ObservableObject {
             } else {
                 stopVisualizerTimer()
             }
+            updateNowPlayingInfo()
             return
         }
         
@@ -216,12 +285,16 @@ class AudioEngineManager: ObservableObject {
             startTimeObservers()
             startVisualizerTimer()
         }
+        
+        updateNowPlayingInfo()
     }
     
     func seek(to time: TimeInterval) {
         currentTime = max(0, min(time, duration))
         let targetCMTime = CMTime(seconds: currentTime, preferredTimescale: 60000)
         player?.seek(to: targetCMTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        
+        updateNowPlayingInfo()
     }
     
     private func startTimeObservers() {
@@ -273,6 +346,57 @@ class AudioEngineManager: ObservableObject {
     private func stopVisualizerTimer() {
         visualizerTimer?.invalidate()
         visualizerTimer = nil
+    }
+    
+    func parseTrackMetadata(from url: URL) -> LocalTrack {
+        let asset = AVAsset(url: url)
+        var title = url.deletingPathExtension().lastPathComponent
+        var artist = "Unknown Artist"
+        var album = "Unknown Album"
+        var genre = "Alternative"
+        var embeddedArtData: Data? = nil
+        var duration: TimeInterval = CMTimeGetSeconds(asset.duration)
+        
+        for format in asset.availableMetadataFormats {
+            for metadataItem in asset.metadata(forFormat: format) {
+                if let commonKey = metadataItem.commonKey {
+                    switch commonKey {
+                    case .commonKeyTitle:
+                        if let value = metadataItem.stringValue { title = value }
+                    case .commonKeyArtist:
+                        if let value = metadataItem.stringValue { artist = value }
+                    case .commonKeyAlbumName:
+                        if let value = metadataItem.stringValue { album = value }
+                    case .commonKeyArtwork:
+                        if let value = metadataItem.dataValue { embeddedArtData = value }
+                    default:
+                        break
+                    }
+                }
+            }
+        }
+        
+        let formatStr = url.pathExtension.uppercased()
+        let isLossless = ["ALAC", "FLAC", "WAV"].contains(formatStr)
+        
+        return LocalTrack(
+            title: title,
+            artist: artist,
+            album: album,
+            genre: genre,
+            duration: duration.isNaN ? 0 : duration,
+            fileURL: url,
+            coverImageName: "music.note",
+            localCoverURL: nil,
+            embeddedArtData: embeddedArtData,
+            dateAdded: Date(),
+            isAtmos: false,
+            fileSize: "Unknown",
+            lyrics: "",
+            isFavorite: false,
+            playCount: 0,
+            format: isLossless ? "Lossless" : formatStr
+        )
     }
     
     deinit {
