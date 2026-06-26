@@ -63,19 +63,29 @@ class LyricsEngine {
             }
         }
         
-        let sortedLines = lines.sorted(by: { $0.timestamp < $1.timestamp })
+        var sortedLines = lines.sorted(by: { $0.timestamp < $1.timestamp })
         if sortedLines.isEmpty { return [] }
+        
+        // 1. Calculate an Artificial End Time for a Lyric Line
+        for i in 0..<sortedLines.count {
+            let wordCount = Double(sortedLines[i].text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.count)
+            let calculatedDuration = min(6.0, max(2.5, wordCount / 3.0))
+            let nextLineStart = (i < sortedLines.count - 1) ? sortedLines[i+1].timestamp : sortedLines[i].timestamp + calculatedDuration
+            let lineEndTime = min(sortedLines[i].timestamp + calculatedDuration, nextLineStart)
+            sortedLines[i].endTime = lineEndTime
+        }
         
         var processed: [SyncedLyricLine] = []
         
-        // Match TSX logic: Intro break if first lyric starts at >= 3.0s
-        if sortedLines[0].timestamp >= 3.0 {
+        // 2 & 3. Intro break if first lyric starts at >= 5.0s
+        if sortedLines[0].timestamp >= 5.0 {
             processed.append(SyncedLyricLine(
-                timestamp: 0.5,
+                timestamp: 1.0,
                 text: "...",
                 isBreak: true,
-                breakStart: 0.5,
-                breakEnd: sortedLines[0].timestamp - 0.5
+                breakStart: 1.0,
+                breakEnd: sortedLines[0].timestamp - 1.0,
+                endTime: sortedLines[0].timestamp - 1.0
             ))
         }
         
@@ -85,16 +95,17 @@ class LyricsEngine {
             if i < sortedLines.count - 1 {
                 let currentLine = sortedLines[i]
                 let nextLine = sortedLines[i+1]
-                let gap = nextLine.timestamp - currentLine.timestamp
+                let gap = nextLine.timestamp - currentLine.endTime
                 
-                // Gap of 3 seconds or more -> instrumental break
-                if gap >= 3.0 {
+                // Gap of 5 seconds or more -> instrumental break
+                if gap >= 5.0 {
                     processed.append(SyncedLyricLine(
-                        timestamp: currentLine.timestamp + 1.0,
+                        timestamp: currentLine.endTime + 1.0,
                         text: "...",
                         isBreak: true,
-                        breakStart: currentLine.timestamp + 1.0,
-                        breakEnd: nextLine.timestamp - 0.5
+                        breakStart: currentLine.endTime + 1.0,
+                        breakEnd: nextLine.timestamp - 1.0,
+                        endTime: nextLine.timestamp - 1.0
                     ))
                 }
             }
