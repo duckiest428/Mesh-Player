@@ -8,13 +8,141 @@
 
 import SwiftUI
 import Combine
+internal import UniformTypeIdentifiers
 
 struct SongTableView: View {
     @ObservedObject var state: AppStateManager
     @ObservedObject var engine: AudioEngineManager
     
+    @State private var showNewPlaylistAlert = false
+    @State private var newPlaylistName = ""
+    @State private var trackToAdd: LocalTrack?
+    
     var body: some View {
         VStack(spacing: 0) {
+            
+            if let tab = state.selectedTab, tab.hasPrefix("playlist-"),
+               let uuidString = tab.components(separatedBy: "-").dropFirst().joined(separator: "-").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)?.removingPercentEncoding,
+               let playlistUUID = UUID(uuidString: uuidString),
+               let playlist = state.playlists.first(where: { $0.id == playlistUUID }) {
+                
+                let trackCount = playlist.tracks.count
+                let totalDuration = playlist.tracks.reduce(0) { $0 + $1.duration }
+                
+                // Playlist Header Banner
+                HStack(spacing: 30) {
+                    // Artwork Container
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.secondary.opacity(0.1))
+                            .frame(width: 220, height: 220)
+                            .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
+                        
+                        if let firstTrack = playlist.tracks.first {
+                            if let data = firstTrack.embeddedArtData, let nsImage = NSImage(data: data) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 220, height: 220)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            } else if let localCoverURL = firstTrack.localCoverURL, let nsImage = NSImage(contentsOf: localCoverURL) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 220, height: 220)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            } else {
+                                Image(systemName: "music.note.list")
+                                    .font(.system(size: 80))
+                                    .foregroundColor(state.theme.textSecondary.opacity(0.5))
+                            }
+                        } else {
+                            Image(systemName: "music.note.list")
+                                .font(.system(size: 80))
+                                .foregroundColor(state.theme.textSecondary.opacity(0.5))
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Playlist")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(state.theme.accent)
+                        
+                        Text(playlist.name)
+                            .font(.system(size: 36, weight: .black, design: .default))
+                            .foregroundColor(state.theme.textPrimary)
+                            .lineLimit(2)
+                        
+                        Text(playlist.description.isEmpty ? "Apple Music" : playlist.description)
+                            .font(.title3)
+                            .foregroundColor(state.theme.textSecondary)
+                        
+                        Text("\(trackCount) songs, \(formatTotalTime(totalDuration))")
+                            .font(.subheadline)
+                            .foregroundColor(state.theme.textSecondary)
+                            .padding(.top, 4)
+                        
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                if let firstTrack = state.filteredTracks.first {
+                                    state.setQueue(tracks: state.filteredTracks, startTrack: firstTrack)
+                                    engine.playTrack(firstTrack)
+                                }
+                            }) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "play.fill")
+                                    Text("Play")
+                                        .fontWeight(.semibold)
+                                }
+                                .frame(width: 120, height: 32)
+                            }
+                            .buttonStyle(.plain)
+                            .background(state.theme.accent)
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
+                            
+                            Button(action: {
+                                // Shuffle Play
+                                if let randomTrack = state.filteredTracks.randomElement() {
+                                    state.setQueue(tracks: state.filteredTracks, startTrack: randomTrack)
+                                    engine.playTrack(randomTrack)
+                                }
+                            }) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "shuffle")
+                                    Text("Shuffle")
+                                        .fontWeight(.semibold)
+                                }
+                                .frame(width: 120, height: 32)
+                            }
+                            .buttonStyle(.plain)
+                            .background(Color.secondary.opacity(0.15))
+                            .foregroundColor(state.theme.accent)
+                            .cornerRadius(6)
+                        }
+                        .padding(.top, 10)
+                    }
+                    
+                    Spacer()
+                }
+                .padding(32)
+                .background(
+                    ZStack {
+                        if let firstTrack = playlist.tracks.first {
+                            if let data = firstTrack.embeddedArtData, let nsImage = NSImage(data: data) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .blur(radius: 60)
+                                    .opacity(0.15)
+                            }
+                        }
+                        LinearGradient(gradient: Gradient(colors: [state.theme.background.opacity(0.0), state.theme.background]), startPoint: .top, endPoint: .bottom)
+                    }
+                )
+                .clipped()
+            }
+            
             // Search, dynamic sorting, and filter header strip
             HStack(spacing: 12) {
                 HStack {
@@ -204,7 +332,7 @@ struct SongTableView: View {
                 
                 Divider()
                 
-                ForEach(state.filteredTracks) { track in
+                ForEach(Array(state.filteredTracks.enumerated()), id: \.offset) { index, track in
                     let isPlayingThis = engine.currentTrack?.id == track.id
                     
                     HStack {
@@ -212,10 +340,12 @@ struct SongTableView: View {
                         HStack(spacing: 8) {
                             if isPlayingThis {
                                 AnimatedEQView(color: state.theme.accent, isPlaying: engine.isPlaying)
-                                    .frame(width: 14)
+                                    .frame(width: 24)
                             } else {
-                                Spacer()
-                                    .frame(width: 14)
+                                Text("\(index + 1)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(state.theme.textSecondary.opacity(0.6))
+                                    .frame(width: 24, alignment: .trailing)
                             }
                             
                             VStack(alignment: .leading, spacing: 2) {
@@ -317,6 +447,55 @@ struct SongTableView: View {
                                 .foregroundColor(state.theme.textSecondary)
                                 .frame(width: 50, alignment: .trailing)
                         }
+                        
+                        Menu {
+                            Button("Play") {
+                                state.setQueue(tracks: state.filteredTracks, startTrack: track)
+                                engine.playTrack(track)
+                            }
+                            
+                            Divider()
+                            
+                            Menu("Add to Playlist") {
+                                Button("New Playlist...") {
+                                    trackToAdd = track
+                                    newPlaylistName = ""
+                                    showNewPlaylistAlert = true
+                                }
+                                
+                                Divider()
+                                
+                                ForEach(state.playlists) { playlist in
+                                    Button(playlist.name) {
+                                        state.addTrackToPlaylist(track: track, playlistId: playlist.id)
+                                    }
+                                }
+                            }
+                            
+                            Divider()
+                            
+                            if let tab = state.selectedTab, tab.hasPrefix("playlist-"),
+                               let uuidString = tab.components(separatedBy: "-").dropFirst().joined(separator: "-").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)?.removingPercentEncoding,
+                               let playlistUUID = UUID(uuidString: uuidString) {
+                                Button("Remove from Playlist") {
+                                    state.removeTrackFromPlaylist(trackId: track.id, playlistId: playlistUUID)
+                                }
+                            }
+                            
+                            Button("Show in Finder") {
+                                if let url = track.fileURL {
+                                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .foregroundColor(state.theme.textSecondary)
+                                .frame(width: 24, height: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .menuStyle(.borderlessButton)
+                        .frame(width: 24)
+                        .padding(.leading, 8)
                     }
                     .padding(.vertical, 4)
                     .padding(.horizontal, 8)
@@ -328,15 +507,105 @@ struct SongTableView: View {
                     .cornerRadius(6)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
+                        state.setQueue(tracks: state.filteredTracks, startTrack: track)
                         engine.playTrack(track)
                     }
                     .onTapGesture(count: 1) {
                         state.selectedTrackId = track.id
                     }
+                    .contextMenu {
+                        Button("Play") {
+                            state.setQueue(tracks: state.filteredTracks, startTrack: track)
+                            engine.playTrack(track)
+                        }
+                        
+                        Divider()
+                        
+                        Menu("Add to Playlist") {
+                            Button("New Playlist...") {
+                                trackToAdd = track
+                                newPlaylistName = ""
+                                showNewPlaylistAlert = true
+                            }
+                            
+                            Divider()
+                            
+                            ForEach(state.playlists) { playlist in
+                                Button(playlist.name) {
+                                    state.addTrackToPlaylist(track: track, playlistId: playlist.id)
+                                }
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        if let tab = state.selectedTab, tab.hasPrefix("playlist-"),
+                           let uuidString = tab.components(separatedBy: "-").dropFirst().joined(separator: "-").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)?.removingPercentEncoding,
+                           let playlistUUID = UUID(uuidString: uuidString) {
+                            Button("Remove from Playlist") {
+                                state.removeTrackFromPlaylist(trackId: track.id, playlistId: playlistUUID)
+                            }
+                        }
+                        
+                        Button("Show in Finder") {
+                            if let url = track.fileURL {
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
+                        }
+                    }
                 }
             }
             .listStyle(.inset)
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                for provider in providers {
+                    provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { (item, error) in
+                        guard let data = item as? Data,
+                              let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                        
+                        // Handle only audio files
+                        let audioExtensions = ["mp3", "m4a", "wav", "flac", "alac", "m4b", "aac", "mp4", "ogg"]
+                        guard audioExtensions.contains(url.pathExtension.lowercased()) else { return }
+                        
+                        DispatchQueue.main.async {
+                            let track = engine.parseTrackMetadata(from: url)
+                            if let organizedURL = LibraryManager.shared.organizeAndCopyFile(at: url, trackMetadata: track) {
+                                let updatedTrack = LocalTrack(
+                                    title: track.title,
+                                    artist: track.artist,
+                                    album: track.album,
+                                    genre: track.genre,
+                                    duration: track.duration,
+                                    fileURL: organizedURL,
+                                    coverImageName: track.coverImageName,
+                                    localCoverURL: track.localCoverURL,
+                                    embeddedArtData: track.embeddedArtData,
+                                    dateAdded: track.dateAdded,
+                                    isAtmos: track.isAtmos,
+                                    fileSize: track.fileSize,
+                                    lyrics: track.lyrics,
+                                    isFavorite: track.isFavorite,
+                                    playCount: track.playCount,
+                                    format: track.format
+                                )
+                                state.upsertTrack(updatedTrack)
+                            }
+                        }
+                    }
+                }
+                return true
+            }
         }
+        .alert("New Playlist", isPresented: $showNewPlaylistAlert, actions: {
+            TextField("Playlist Name", text: $newPlaylistName)
+            Button("Create", action: {
+                if !newPlaylistName.isEmpty {
+                    state.createNewPlaylist(name: newPlaylistName, initialTrack: trackToAdd)
+                }
+            })
+            Button("Cancel", role: .cancel, action: {})
+        }, message: {
+            Text("Enter a name for the new playlist.")
+        })
     }
     
     private func getCriteriaLabel(_ key: String) -> String {
@@ -368,30 +637,39 @@ struct SongTableView: View {
         let s = Int(sec) % 60
         return String(format: "%d:%02d", m, s)
     }
+    private func formatTotalTime(_ seconds: TimeInterval) -> String {
+        let h = Int(seconds) / 3600
+        let m = (Int(seconds) % 3600) / 60
+        if h > 0 {
+            return "\(h) hr \(m) min"
+        } else {
+            return "\(m) min"
+        }
+    }
 }
 
 struct AnimatedEQView: View {
     let color: Color
     let isPlaying: Bool
     
-    @State private var heights: [CGFloat] = [4, 4, 4]
+    @State private var heights: [CGFloat] = [0, 0, 0]
     let timer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
     
     var body: some View {
         HStack(spacing: 2) {
             RoundedRectangle(cornerRadius: 1)
                 .fill(color)
-                .frame(width: 3, height: isPlaying ? heights[0] : 2)
+                .frame(width: 3, height: isPlaying ? heights[0] : 0)
             
             RoundedRectangle(cornerRadius: 1)
                 .fill(color)
-                .frame(width: 3, height: isPlaying ? heights[1] : 2)
+                .frame(width: 3, height: isPlaying ? heights[1] : 0)
             
             RoundedRectangle(cornerRadius: 1)
                 .fill(color)
-                .frame(width: 3, height: isPlaying ? heights[2] : 2)
+                .frame(width: 3, height: isPlaying ? heights[2] : 0)
         }
-        .frame(height: 12)
+        .frame(height: 12, alignment: .bottom)
         .animation(.easeInOut(duration: 0.15), value: heights)
         .animation(.easeInOut(duration: 0.3), value: isPlaying)
         .onReceive(timer) { _ in
