@@ -17,6 +17,9 @@ struct PlayerControlsView: View {
     
     @State private var isHoveringArt = false
     @State private var isHoveringArtist = false
+    @State private var showNewPlaylistAlert = false
+    @State private var newPlaylistName = ""
+    @State private var trackToAdd: LocalTrack?
     
     var body: some View {
         HStack(spacing: 18) {
@@ -73,31 +76,51 @@ struct PlayerControlsView: View {
                             .foregroundColor(state.theme.textPrimary)
                             .lineLimit(1)
                             
-                        if engine.currentTrack != nil {
+                        if let track = engine.currentTrack {
                             Menu {
-                                Button(action: {
-                                    // Play Next action simulation
-                                }) {
-                                    Label("Play Next", systemImage: "text.insert")
+                                Button("Play") {
+                                    engine.playTrack(track)
                                 }
-                                Button(action: {
-                                    // Play Later action simulation
-                                }) {
-                                    Label("Play Later", systemImage: "text.append")
-                                }
+                                
                                 Divider()
+                                
                                 Button(action: {
-                                    if let current = engine.currentTrack {
-                                        state.toggleFavorite(track: current)
-                                    }
+                                    state.toggleFavorite(track: track)
                                 }) {
-                                    let isFav = engine.currentTrack?.isFavorite == true
+                                    let isFav = track.isFavorite
                                     Label(isFav ? "Remove from Favorites" : "Add to Favorites", systemImage: isFav ? "heart.fill" : "heart")
+                                }
+                                
+                                Divider()
+                                
+                                Menu("Add to Playlist") {
+                                    Button("New Playlist...") {
+                                        trackToAdd = track
+                                        newPlaylistName = ""
+                                        showNewPlaylistAlert = true
+                                    }
+                                    
+                                    Divider()
+                                    
+                                    ForEach(state.playlists) { playlist in
+                                        Button(playlist.name) {
+                                            state.addTrackToPlaylist(track: track, playlistId: playlist.id)
+                                        }
+                                    }
+                                }
+                                
+                                Divider()
+                                
+                                Button("Show in Finder") {
+                                    if let url = track.fileURL {
+                                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                                    }
                                 }
                             } label: {
                                 Image(systemName: "ellipsis")
                                     .font(.system(size: 14, weight: .bold))
                                     .foregroundColor(state.theme.textSecondary)
+                                    .contentShape(Rectangle())
                             }
                             .menuStyle(.borderlessButton)
                             .frame(width: 24)
@@ -170,10 +193,7 @@ struct PlayerControlsView: View {
             HStack(spacing: 18) {
                 Button(action: {
                     engine.triggerHaptic(pattern: .alignment)
-                    if let current = engine.currentTrack, let idx = state.tracks.firstIndex(where: { $0.id == current.id }) {
-                        let prevIdx = (idx - 1 + state.tracks.count) % state.tracks.count
-                        engine.playTrack(state.tracks[prevIdx])
-                    }
+                    state.playPrevious(engine: engine)
                 }) {
                     Image(systemName: "backward.fill")
                         .font(.title2)
@@ -200,10 +220,7 @@ struct PlayerControlsView: View {
                 
                 Button(action: {
                     engine.triggerHaptic(pattern: .alignment)
-                    if let current = engine.currentTrack, let idx = state.tracks.firstIndex(where: { $0.id == current.id }) {
-                        let nextIdx = (idx + 1) % state.tracks.count
-                        engine.playTrack(state.tracks[nextIdx])
-                    }
+                    state.playNext(engine: engine)
                 }) {
                     Image(systemName: "forward.fill")
                         .font(.title2)
@@ -233,14 +250,28 @@ struct PlayerControlsView: View {
                     .background(state.theme.textSecondary.opacity(0.3))
                 
                 Button(action: {
-                    state.activeRightSidebar = state.activeRightSidebar == .lyrics ? .none : .lyrics
+                    state.toggleShuffle(currentTrack: engine.currentTrack)
+                }) {
+                    Image(systemName: "shuffle")
+                        .font(.body)
+                        .foregroundColor(state.isQueueShuffled ? state.theme.accent : state.theme.textSecondary)
+                }
+                .buttonStyle(PremiumButtonStyle())
+                .help("Shuffle")
+                
+                let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
+                Button(action: {
+                    if hasLyrics {
+                        state.activeRightSidebar = state.activeRightSidebar == .lyrics ? .none : .lyrics
+                    }
                 }) {
                     Image(systemName: "quote.bubble")
                         .font(.body)
-                        .foregroundColor(state.activeRightSidebar == .lyrics ? state.theme.accent : state.theme.textSecondary)
+                        .foregroundColor(!hasLyrics ? state.theme.textSecondary.opacity(0.3) : (state.activeRightSidebar == .lyrics ? state.theme.accent : state.theme.textSecondary))
                 }
                 .buttonStyle(PremiumButtonStyle())
-                .help("Synced Lyrics")
+                .disabled(!hasLyrics)
+                .help(hasLyrics ? "Synced Lyrics" : "No Lyrics Available")
                 
                 Button(action: {
                     state.activeRightSidebar = state.activeRightSidebar == .queue ? .none : .queue
@@ -274,7 +305,10 @@ struct PlayerControlsView: View {
                     .help("Open Mini Player")
                 }
 
-                Button(action: { showFullscreen.toggle() }) {
+                Button(action: {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    showFullscreen.toggle()
+                }) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.body)
                         .foregroundColor(state.theme.textSecondary)
@@ -296,6 +330,17 @@ struct PlayerControlsView: View {
         .padding(.leading, 24)
         .padding(.trailing, 24)
         .background(state.theme.sidebarBackground.opacity(0.95))
+        .alert("New Playlist", isPresented: $showNewPlaylistAlert, actions: {
+            TextField("Playlist Name", text: $newPlaylistName)
+            Button("Create", action: {
+                if !newPlaylistName.isEmpty {
+                    state.createNewPlaylist(name: newPlaylistName, initialTrack: trackToAdd)
+                }
+            })
+            Button("Cancel", role: .cancel, action: {})
+        }, message: {
+            Text("Enter a name for the new playlist.")
+        })
     }
     
     private func formatTime(_ sec: TimeInterval) -> String {
