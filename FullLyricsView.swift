@@ -8,6 +8,7 @@
 
 import SwiftUI
 import AppKit
+import CoreImage
 
 struct FullLyricsView: View {
     @ObservedObject var state: AppStateManager
@@ -25,6 +26,9 @@ struct FullLyricsView: View {
     @State private var activeLineId: UUID? = nil
     @State private var cachedColors: [Color] = []
     
+    @State private var isHoveringArt = false
+    @State private var isHoveringArtist = false
+
     private var activeBackgroundColors: [Color] {
         if cachedColors.isEmpty {
             return generateComplementaryColors(from: state.theme.accent)
@@ -40,48 +44,64 @@ struct FullLyricsView: View {
             } else if let imageURL = track.localCoverURL, let img = NSImage(contentsOf: imageURL) {
                 nsImage = img
             }
-            cachedColors = extractDominantColors(from: nsImage, fallback: state.theme.accent)
+            extractDominantColors(from: nsImage, fallback: state.theme.accent) { colors in
+                withAnimation(.easeOut(duration: 0.8)) {
+                    self.cachedColors = colors
+                }
+            }
         } else {
-            cachedColors = generateComplementaryColors(from: state.theme.accent)
+            withAnimation(.easeOut(duration: 0.8)) {
+                cachedColors = generateComplementaryColors(from: state.theme.accent)
+            }
         }
     }
 
-    private func extractDominantColors(from image: NSImage?, fallback: Color) -> [Color] {
-        guard let image = image else {
-            return generateComplementaryColors(from: fallback)
+    private func extractDominantColors(from image: NSImage?, fallback: Color, completion: @escaping ([Color]) -> Void) {
+        guard let image = image,
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            DispatchQueue.main.async { completion(self.generateComplementaryColors(from: fallback)) }
+            return
         }
-        let size = image.size
-        if size.width <= 0 || size.height <= 0 {
-            return generateComplementaryColors(from: fallback)
-        }
-        guard let tiffData = image.tiffRepresentation,
-              let bitmapRep = NSBitmapImageRep(data: tiffData) else {
-            return generateComplementaryColors(from: fallback)
-        }
-        let w = Double(bitmapRep.pixelsWide)
-        let h = Double(bitmapRep.pixelsHigh)
-        if w <= 0 || h <= 0 {
-            return generateComplementaryColors(from: fallback)
-        }
-        var colors: [Color] = []
-        let gridPoints = [0.15, 0.5, 0.85]
-        for yPct in gridPoints {
-            for xPct in gridPoints {
-                let px = Int(Double(xPct) * (w - 1))
-                let py = Int(Double(yPct) * (h - 1))
-                if let nsColor = bitmapRep.colorAt(x: px, y: py) {
-                    colors.append(Color(nsColor))
-                } else {
-                    colors.append(fallback)
-                }
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ciImage = CIImage(cgImage: cgImage)
+            let extentVector = CIVector(x: ciImage.extent.origin.x, y: ciImage.extent.origin.y, z: ciImage.extent.size.width, w: ciImage.extent.size.height)
+            
+            guard let filter = CIFilter(name: "CIAreaAverage", parameters: [kCIInputImageKey: ciImage, kCIInputExtentKey: extentVector]),
+                  let outputImage = filter.outputImage else {
+                DispatchQueue.main.async { completion(self.generateComplementaryColors(from: fallback)) }
+                return
+            }
+            
+            var bitmap = [UInt8](repeating: 0, count: 4)
+            let context = CIContext(options: [.workingColorSpace: kCFNull as Any])
+            context.render(outputImage, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: nil)
+            
+            let r = CGFloat(bitmap[0]) / 255.0
+            let g = CGFloat(bitmap[1]) / 255.0
+            let b = CGFloat(bitmap[2]) / 255.0
+            
+            let dominantColor = Color(red: Double(r), green: Double(g), blue: Double(b))
+            
+            let hsb = NSColor(red: r, green: g, blue: b, alpha: 1.0)
+            var hue: CGFloat = 0
+            var sat: CGFloat = 0
+            var bri: CGFloat = 0
+            var alpha: CGFloat = 0
+            hsb.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha)
+            
+            let secondaryHue = fmod(hue + 0.15, 1.0)
+            let secondaryColor = Color(hue: Double(secondaryHue), saturation: Double(sat), brightness: Double(max(0.3, bri - 0.2)))
+            
+            var colors: [Color] = []
+            for i in 0..<9 {
+                colors.append(i % 2 == 0 ? dominantColor : secondaryColor)
+            }
+            
+            DispatchQueue.main.async {
+                completion(colors)
             }
         }
-        if colors.count < 9 {
-            while colors.count < 9 {
-                colors.append(fallback)
-            }
-        }
-        return colors
     }
 
     private func generateComplementaryColors(from baseColor: Color) -> [Color] {
@@ -137,23 +157,23 @@ struct FullLyricsView: View {
                     }
                 } else {
                     ZStack {
-                        // Blob 1: accent color
+                        // Blob 1
                         Circle()
-                            .fill(state.theme.accent.opacity(0.28))
+                            .fill(activeBackgroundColors.count > 4 ? activeBackgroundColors[4] : state.theme.accent.opacity(0.28))
                             .frame(width: 480, height: 480)
                             .offset(x: isAnimating ? -140 : 140, y: isAnimating ? -100 : 120)
                             .scaleEffect(isAnimating ? 1.25 : 0.8)
                         
-                        // Blob 2: Deep Indigo / Blue
+                        // Blob 2
                         Circle()
-                            .fill(Color.indigo.opacity(0.24))
+                            .fill(activeBackgroundColors.count > 7 ? activeBackgroundColors[7] : Color.indigo.opacity(0.24))
                             .frame(width: 550, height: 550)
                             .offset(x: isAnimating ? 180 : -120, y: isAnimating ? 120 : -140)
                             .scaleEffect(isAnimating ? 0.85 : 1.3)
                         
-                        // Blob 3: Cyan / Purple
+                        // Blob 3
                         Circle()
-                            .fill(Color.purple.opacity(0.22))
+                            .fill(activeBackgroundColors.count > 2 ? activeBackgroundColors[2] : Color.purple.opacity(0.22))
                             .frame(width: 420, height: 420)
                             .offset(x: isAnimating ? -60 : 100, y: isAnimating ? 160 : -110)
                             .scaleEffect(isAnimating ? 1.2 : 0.85)
@@ -190,42 +210,65 @@ struct FullLyricsView: View {
                     
                     // LEFT COLUMN: Huge cover art, track metadata & embedded player
                     VStack(spacing: 32) {
-                        ZStack {
+                        Button(action: {
                             if let track = engine.currentTrack {
-                                if let artData = track.embeddedArtData, let nsImage = NSImage(data: artData) {
-                                    Image(nsImage: nsImage)
-                                        .resizable()
-                                        .scaledToFill()
+                                state.selectedTab = "albums"
+                                state.activeFilterType = "album"
+                                state.activeFilterValue = track.album
+                                isPresented = false
+                            }
+                        }) {
+                            ZStack {
+                                if let primaryColor = cachedColors.first {
+                                    RoundedRectangle(cornerRadius: 24)
+                                        .fill(primaryColor)
                                         .frame(width: 380, height: 380)
-                                        .cornerRadius(24)
-                                        .shadow(color: state.theme.accent.opacity(0.35), radius: 32)
-                                } else if let imageURL = track.localCoverURL, let nsImage = NSImage(contentsOf: imageURL) {
-                                    Image(nsImage: nsImage)
-                                        .resizable()
-                                        .scaledToFill()
+                                        .blur(radius: 60)
+                                        .opacity(0.65)
+                                        .animation(.easeOut(duration: 0.8), value: primaryColor)
+                                }
+                                
+                                if let track = engine.currentTrack {
+                                    if let artData = track.embeddedArtData, let nsImage = NSImage(data: artData) {
+                                        Image(nsImage: nsImage)
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 380, height: 380)
+                                            .cornerRadius(24)
+                                    } else if let imageURL = track.localCoverURL, let nsImage = NSImage(contentsOf: imageURL) {
+                                        Image(nsImage: nsImage)
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 380, height: 380)
+                                            .cornerRadius(24)
+                                    } else {
+                                        RoundedRectangle(cornerRadius: 24)
+                                            .fill(LinearGradient(
+                                                gradient: Gradient(colors: [state.theme.accent, state.theme.background]),
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            ))
+                                            .frame(width: 380, height: 380)
+                                        
+                                        Image(systemName: track.coverImageName)
+                                            .font(.system(size: 130))
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    AnimatedArtworkView(track: track, cornerRadius: 24)
                                         .frame(width: 380, height: 380)
-                                        .cornerRadius(24)
-                                        .shadow(color: state.theme.accent.opacity(0.35), radius: 32)
+                                        .allowsHitTesting(false)
                                 } else {
                                     RoundedRectangle(cornerRadius: 24)
-                                        .fill(LinearGradient(
-                                            gradient: Gradient(colors: [state.theme.accent, state.theme.background]),
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        ))
+                                        .fill(Color.secondary.opacity(0.15))
                                         .frame(width: 380, height: 380)
-                                        .shadow(color: state.theme.accent.opacity(0.35), radius: 32)
-                                    
-                                    Image(systemName: track.coverImageName)
-                                        .font(.system(size: 130))
-                                        .foregroundColor(.white)
                                 }
-                            } else {
-                                RoundedRectangle(cornerRadius: 24)
-                                    .fill(Color.secondary.opacity(0.15))
-                                    .frame(width: 380, height: 380)
                             }
                         }
+                        .buttonStyle(PlainButtonStyle())
+                        .scaleEffect(isHoveringArt ? 1.02 : 1.0)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHoveringArt)
+                        .onHover { isHoveringArt = $0 }
                         
                         // Text descriptions and action row matching the reference layout
                         HStack(alignment: .center) {
@@ -235,10 +278,22 @@ struct FullLyricsView: View {
                                     .foregroundColor(.white)
                                     .lineLimit(1)
                                 
-                                Text("\(engine.currentTrack?.artist ?? "---") — \(engine.currentTrack?.album ?? "---")")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
+                                Button(action: {
+                                    if let track = engine.currentTrack {
+                                        state.selectedTab = "artists"
+                                        state.activeFilterType = "artist"
+                                        state.activeFilterValue = track.artist
+                                        isPresented = false
+                                    }
+                                }) {
+                                    Text("\(engine.currentTrack?.artist ?? "---") — \(engine.currentTrack?.album ?? "---")")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(isHoveringArtist ? .white : .white.opacity(0.6))
+                                        .lineLimit(1)
+                                        .underline(isHoveringArtist)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .onHover { isHoveringArtist = $0 }
                             }
                             
                             Spacer()
@@ -332,29 +387,7 @@ struct FullLyricsView: View {
                                 Spacer()
                                 
                                 if engine.isAtmosTrack {
-                                    HStack(spacing: 5) {
-                                        HStack(spacing: 1.5) {
-                                            Path { path in
-                                                path.move(to: CGPoint(x: 0, y: 0))
-                                                path.addArc(center: CGPoint(x: 0, y: 4), radius: 4, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
-                                                path.addLine(to: CGPoint(x: 0, y: 0))
-                                                path.closeSubpath()
-                                            }
-                                            .fill(Color.white)
-                                            .frame(width: 4, height: 8)
-                                            
-                                            Path { path in
-                                                path.addArc(center: CGPoint(x: 4, y: 4), radius: 4, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
-                                                path.addLine(to: CGPoint(x: 4, y: 8))
-                                                path.closeSubpath()
-                                            }
-                                            .fill(Color.white)
-                                            .frame(width: 4, height: 8)
-                                        }
-                                        Text("Dolby Atmos")
-                                            .font(.system(size: 11, weight: .bold))
-                                    }
-                                    .foregroundColor(.white.opacity(0.85))
+                                    DolbyAtmosBadge(color: .white, scale: 1.1, showText: true)
                                 } else {
                                     Text(engine.currentTrack?.format ?? "AAC 256kbps")
                                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -378,6 +411,7 @@ struct FullLyricsView: View {
                         HStack(alignment: .center) {
                             // Shuffle switch
                             Button(action: {
+                                engine.triggerHaptic(pattern: .generic)
                                 isShuffleActive.toggle()
                             }) {
                                 Image(systemName: "shuffle")
@@ -391,6 +425,7 @@ struct FullLyricsView: View {
                             
                             // Back button
                             Button(action: {
+                                engine.triggerHaptic(pattern: .alignment)
                                 if let current = engine.currentTrack, let idx = state.tracks.firstIndex(where: { $0.id == current.id }) {
                                     let prevIdx = (idx - 1 + state.tracks.count) % state.tracks.count
                                     engine.playTrack(state.tracks[prevIdx])
@@ -406,7 +441,10 @@ struct FullLyricsView: View {
                             Spacer()
                             
                             // Play Pause central toggle (flat button with no colored circle, simple bold toggle)
-                            Button(action: { engine.togglePlayPause() }) {
+                            Button(action: {
+                                engine.triggerHaptic(pattern: .generic)
+                                engine.togglePlayPause()
+                            }) {
                                 Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
                                     .font(.system(size: 38))
                                     .foregroundColor(.white)
@@ -418,6 +456,7 @@ struct FullLyricsView: View {
                             
                             // Forward button
                             Button(action: {
+                                engine.triggerHaptic(pattern: .alignment)
                                 if let current = engine.currentTrack, let idx = state.tracks.firstIndex(where: { $0.id == current.id }) {
                                     let nextIdx = (idx + 1) % state.tracks.count
                                     engine.playTrack(state.tracks[nextIdx])
@@ -434,6 +473,7 @@ struct FullLyricsView: View {
                             
                             // Repeat switch
                             Button(action: {
+                                engine.triggerHaptic(pattern: .generic)
                                 isRepeatActive.toggle()
                             }) {
                                 Image(systemName: "repeat")
@@ -501,13 +541,13 @@ struct FullLyricsView: View {
                                         }
                                     }
                                 case .queue:
-                                    QueueSidebarView(state: state, engine: engine)
+                                    QueueSidebarView(state: state, engine: engine, isFullscreen: true)
                                         .frame(width: 440)
                                         .cornerRadius(16)
                                         .shadow(radius: 10)
                                         .padding(.vertical, 20)
                                 case .output:
-                                    OutputDeviceSidebarView(state: state)
+                                    OutputDeviceSidebarView(state: state, engine: engine, isFullscreen: true)
                                         .frame(width: 440)
                                         .cornerRadius(16)
                                         .shadow(radius: 10)
@@ -605,9 +645,10 @@ struct FullLyricsView: View {
     }
     
     private func isLineActive(_ line: SyncedLyricLine) -> Bool {
-        guard let index = engine.parsedLyrics.firstIndex(of: line) else { return false }
-        let nextTime = index + 1 < engine.parsedLyrics.count ? engine.parsedLyrics[index + 1].timestamp : Double.infinity
-        return engine.currentTime >= line.timestamp && engine.currentTime < nextTime
+        if line.isBreak {
+            return engine.currentTime >= line.breakStart && engine.currentTime <= line.breakEnd
+        }
+        return engine.currentTime >= line.timestamp && engine.currentTime < line.endTime
     }
     
     private func formatTime(_ sec: TimeInterval) -> String {
