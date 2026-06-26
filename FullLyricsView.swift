@@ -23,6 +23,10 @@ struct FullLyricsView: View {
     @State private var isFavorite: Bool = false
     @State private var isShuffleActive: Bool = false
     @State private var isRepeatActive: Bool = false
+    
+    @State private var showNewPlaylistAlert = false
+    @State private var newPlaylistName = ""
+    @State private var trackToAdd: LocalTrack?
     @State private var activeLineId: UUID? = nil
     @State private var cachedColors: [Color] = []
     
@@ -31,7 +35,7 @@ struct FullLyricsView: View {
 
     private var activeBackgroundColors: [Color] {
         if cachedColors.isEmpty {
-            return generateComplementaryColors(from: state.theme.accent)
+            return Array(repeating: Color.black.opacity(0.0), count: 9)
         }
         return cachedColors
     }
@@ -323,29 +327,45 @@ struct FullLyricsView: View {
                                 .buttonStyle(PremiumButtonStyle())
                                 
                                 Menu {
-                                    Button(action: {
-                                        // Play Next simulation
-                                    }) {
-                                        Label("Play Next", systemImage: "text.insert")
-                                    }
-                                    Button(action: {
-                                        // Play Later simulation
-                                    }) {
-                                        Label("Play Later", systemImage: "text.append")
-                                    }
-                                    Divider()
-                                    Button(action: {
-                                        if let current = engine.currentTrack {
-                                            state.toggleFavorite(track: current)
-                                            isFavorite = current.isFavorite
+                                    if let track = engine.currentTrack {
+                                        Button("Play") {
+                                            engine.playTrack(track)
                                         }
-                                    }) {
-                                        Label(isFavorite ? "Remove from Favorites" : "Add to Favorites", systemImage: isFavorite ? "heart.fill" : "heart")
-                                    }
-                                    Button(role: .destructive, action: {
-                                        // Remove simulation
-                                    }) {
-                                        Label("Remove...", systemImage: "trash")
+                                        
+                                        Divider()
+                                        
+                                        Button(action: {
+                                            state.toggleFavorite(track: track)
+                                            isFavorite = track.isFavorite
+                                        }) {
+                                            Label(isFavorite ? "Remove from Favorites" : "Add to Favorites", systemImage: isFavorite ? "heart.fill" : "heart")
+                                        }
+                                        
+                                        Divider()
+                                        
+                                        Menu("Add to Playlist") {
+                                            Button("New Playlist...") {
+                                                trackToAdd = track
+                                                newPlaylistName = ""
+                                                showNewPlaylistAlert = true
+                                            }
+                                            
+                                            Divider()
+                                            
+                                            ForEach(state.playlists) { playlist in
+                                                Button(playlist.name) {
+                                                    state.addTrackToPlaylist(track: track, playlistId: playlist.id)
+                                                }
+                                            }
+                                        }
+                                        
+                                        Divider()
+                                        
+                                        Button("Show in Finder") {
+                                            if let url = track.fileURL {
+                                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                                            }
+                                        }
                                     }
                                 } label: {
                                     ZStack {
@@ -426,10 +446,7 @@ struct FullLyricsView: View {
                             // Back button
                             Button(action: {
                                 engine.triggerHaptic(pattern: .alignment)
-                                if let current = engine.currentTrack, let idx = state.tracks.firstIndex(where: { $0.id == current.id }) {
-                                    let prevIdx = (idx - 1 + state.tracks.count) % state.tracks.count
-                                    engine.playTrack(state.tracks[prevIdx])
-                                }
+                                state.playPrevious(engine: engine)
                             }) {
                                 Image(systemName: "backward.fill")
                                     .font(.system(size: 24))
@@ -457,10 +474,7 @@ struct FullLyricsView: View {
                             // Forward button
                             Button(action: {
                                 engine.triggerHaptic(pattern: .alignment)
-                                if let current = engine.currentTrack, let idx = state.tracks.firstIndex(where: { $0.id == current.id }) {
-                                    let nextIdx = (idx + 1) % state.tracks.count
-                                    engine.playTrack(state.tracks[nextIdx])
-                                }
+                                state.playNext(engine: engine)
                             }) {
                                 Image(systemName: "forward.fill")
                                     .font(.system(size: 24))
@@ -496,23 +510,7 @@ struct FullLyricsView: View {
                                     ScrollViewReader { proxy in
                                         ScrollView(showsIndicators: false) {
                                             if engine.parsedLyrics.isEmpty {
-                                                VStack(spacing: 16) {
-                                                    Spacer()
-                                                    Image(systemName: "waveform.circle")
-                                                        .font(.system(size: 56))
-                                                        .foregroundColor(.red.opacity(0.8))
-                                                    Text("Instrumental Track")
-                                                        .font(.title3)
-                                                        .bold()
-                                                        .foregroundColor(.white)
-                                                    Text("Listening to spatial audio waves. Dolby is dynamically mixing objects above and around you.")
-                                                        .font(.caption)
-                                                        .foregroundColor(.gray)
-                                                        .multilineTextAlignment(.center)
-                                                        .frame(maxWidth: 320)
-                                                    Spacer()
-                                                }
-                                                .frame(height: 500)
+                                                EmptyView()
                                             } else {
                                                 VStack(alignment: .leading, spacing: 36) {
                                                     ForEach(engine.parsedLyrics) { line in
@@ -578,15 +576,19 @@ struct FullLyricsView: View {
                     Spacer()
                     
                     HStack(spacing: 20) {
+                        let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
                         Button(action: {
-                            rightPanel = rightPanel == .lyrics ? .none : .lyrics
+                            if hasLyrics {
+                                rightPanel = rightPanel == .lyrics ? .none : .lyrics
+                            }
                         }) {
                             Image(systemName: "quote.bubble")
                                 .font(.title3)
-                                .foregroundColor(rightPanel == .lyrics ? .red : .white.opacity(0.6))
+                                .foregroundColor(!hasLyrics ? .white.opacity(0.2) : (rightPanel == .lyrics ? .red : .white.opacity(0.6)))
                         }
                         .buttonStyle(PremiumButtonStyle())
-                        .help("Synced Lyrics")
+                        .disabled(!hasLyrics)
+                        .help(hasLyrics ? "Synced Lyrics" : "No Lyrics Available")
                         
                         Button(action: {
                             rightPanel = rightPanel == .queue ? .none : .queue
@@ -641,6 +643,17 @@ struct FullLyricsView: View {
             .onChange(of: engine.currentTrack) { newValue in
                 updateCachedColors()
             }
+            .alert("New Playlist", isPresented: $showNewPlaylistAlert, actions: {
+                TextField("Playlist Name", text: $newPlaylistName)
+                Button("Create", action: {
+                    if !newPlaylistName.isEmpty {
+                        state.createNewPlaylist(name: newPlaylistName, initialTrack: trackToAdd)
+                    }
+                })
+                Button("Cancel", role: .cancel, action: {})
+            }, message: {
+                Text("Enter a name for the new playlist.")
+            })
         }
     }
     
