@@ -8,6 +8,14 @@
 
 import SwiftUI
 import Combine
+import iTunesLibrary
+
+// MARK: - Native Apple Music Integration Setup Instructions
+// To enable this feature in Xcode:
+// 1. Open your project target settings.
+// 2. Go to the Info tab (or edit Info.plist directly).
+// 3. Add the key "Privacy - Media Library Usage Description" (NSAppleMusicUsageDescription).
+// 4. Set the value to a description, e.g., "Mesh Player requires access to your Apple Music library to import your playlists and favorite tracks."
 
 // MARK: - Models
 
@@ -31,12 +39,21 @@ struct LocalTrack: Identifiable, Hashable {
     var format: String = "AAC 256kbps"
 }
 
+struct PlaylistTrack: Identifiable, Hashable {
+    let id: UUID = UUID()
+    var track: LocalTrack
+}
+
 struct Playlist: Identifiable, Hashable {
     let id: UUID = UUID()
     var name: String
     var description: String
     var isImported: Bool
-    var tracks: [LocalTrack]
+    var playlistTracks: [PlaylistTrack]
+    
+    var tracks: [LocalTrack] {
+        return playlistTracks.map { $0.track }
+    }
 }
 
 struct LocalAlbum: Identifiable, Hashable {
@@ -95,6 +112,162 @@ struct ThemeColor {
 
 // MARK: - App State Context
 
+import SwiftUI
+import AppKit
+import AVFoundation
+
+struct AnimatedArtworkView: NSViewRepresentable {
+    let track: LocalTrack
+    let cornerRadius: CGFloat
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.cornerRadius = cornerRadius
+        view.layer?.masksToBounds = true
+        
+        let playerLayer = AVPlayerLayer()
+        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.cornerRadius = cornerRadius
+        playerLayer.masksToBounds = true
+        view.layer?.addSublayer(playerLayer)
+        
+        context.coordinator.playerLayer = playerLayer
+        updatePlayer(for: track, in: context)
+        
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if context.coordinator.currentTrackId != track.id {
+            updatePlayer(for: track, in: context)
+        }
+        context.coordinator.playerLayer?.frame = nsView.bounds
+    }
+    
+    private func updatePlayer(for track: LocalTrack, in context: Context) {
+        context.coordinator.currentTrackId = track.id
+        context.coordinator.player?.pause()
+        context.coordinator.player = nil
+        context.coordinator.playerLayer?.player = nil
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let videoURL = self.findVideoURL(for: track) {
+                DispatchQueue.main.async {
+                    if context.coordinator.currentTrackId == track.id {
+                        let player = AVPlayer(url: videoURL)
+                        player.isMuted = true
+                        context.coordinator.player = player
+                        context.coordinator.playerLayer?.player = player
+                        player.play()
+                        
+                        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { _ in
+                            player.seek(to: .zero)
+                            player.play()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func findVideoURL(for track: LocalTrack) -> URL? {
+        let extensions = ["mp4", "mov", "m4v"]
+        
+        if let fileURL = track.fileURL {
+            let baseUrl = fileURL.deletingPathExtension()
+            for ext in extensions {
+                let videoURL = baseUrl.appendingPathExtension(ext)
+                if FileManager.default.fileExists(atPath: videoURL.path) {
+                    return videoURL
+                }
+            }
+        }
+        
+        if let coverURL = track.localCoverURL {
+            let baseUrl = coverURL.deletingPathExtension()
+            for ext in extensions {
+                let videoURL = baseUrl.appendingPathExtension(ext)
+                if FileManager.default.fileExists(atPath: videoURL.path) {
+                    return videoURL
+                }
+            }
+            
+            let dirUrl = coverURL.deletingLastPathComponent()
+            for ext in extensions {
+                let videoURL = dirUrl.appendingPathComponent("artwork").appendingPathExtension(ext)
+                if FileManager.default.fileExists(atPath: videoURL.path) {
+                    return videoURL
+                }
+            }
+        }
+        
+        if let fileURL = track.fileURL {
+            let asset = AVAsset(url: fileURL)
+            if asset.tracks(withMediaType: .video).count > 0 {
+                return fileURL
+            }
+        }
+        
+        return nil
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator {
+        var player: AVPlayer?
+        var playerLayer: AVPlayerLayer?
+        var currentTrackId: UUID?
+    }
+}
+
+class LibraryManager {
+    static let shared = LibraryManager()
+    
+    let libraryDirectory: URL
+    
+    private init() {
+        let musicDir = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!
+        libraryDirectory = musicDir.appendingPathComponent("Mesh Player")
+        
+        if !FileManager.default.fileExists(atPath: libraryDirectory.path) {
+            do {
+                try FileManager.default.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
+            } catch {
+                print("Failed to create Mesh Player library directory: \(error)")
+            }
+        }
+    }
+    
+    func organizeAndCopyFile(at sourceURL: URL, trackMetadata: LocalTrack) -> URL? {
+        let artistDir = libraryDirectory.appendingPathComponent("Artists").appendingPathComponent(trackMetadata.artist.isEmpty ? "Unknown Artist" : trackMetadata.artist)
+        let albumDir = artistDir.appendingPathComponent(trackMetadata.album.isEmpty ? "Unknown Album" : trackMetadata.album)
+        
+        do {
+            if !FileManager.default.fileExists(atPath: albumDir.path) {
+                try FileManager.default.createDirectory(at: albumDir, withIntermediateDirectories: true)
+            }
+            
+            let filename = trackMetadata.title.isEmpty ? sourceURL.lastPathComponent : "\(trackMetadata.title).\(sourceURL.pathExtension)"
+            // Sanitize filename
+            let sanitizedFilename = filename.replacingOccurrences(of: "/", with: "_")
+            let destinationURL = albumDir.appendingPathComponent(sanitizedFilename)
+            
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                return destinationURL // Already organized
+            }
+            
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            return destinationURL
+        } catch {
+            print("Failed to organize file: \(error)")
+            return nil
+        }
+    }
+}
+
 class AppStateManager: ObservableObject {
     enum RightSidebarPanel: String, CaseIterable {
         case none, lyrics, queue, output
@@ -104,7 +277,70 @@ class AppStateManager: ObservableObject {
         didSet {
             activeFilterType = nil
             activeFilterValue = nil
+            searchKeyword = ""
         }
+    }
+    
+    @Published var activeQueue: [LocalTrack] = []
+    @Published var unshuffleQueue: [LocalTrack] = []
+    @Published var isQueueShuffled: Bool = false
+    @Published var removePlaylistSongsFromLibrary: Bool = false
+    
+    // Manage active queue tracking
+    func setQueue(tracks: [LocalTrack], startTrack: LocalTrack) {
+        unshuffleQueue = tracks
+        if isQueueShuffled {
+            var shuffled = tracks.filter { $0.id != startTrack.id }.shuffled()
+            shuffled.insert(startTrack, at: 0)
+            activeQueue = shuffled
+        } else {
+            activeQueue = tracks
+        }
+    }
+    
+    func toggleShuffle(currentTrack: LocalTrack?) {
+        isQueueShuffled.toggle()
+        if isQueueShuffled {
+            if let current = currentTrack, activeQueue.contains(where: { $0.id == current.id }) {
+                var shuffled = unshuffleQueue.filter { $0.id != current.id }.shuffled()
+                shuffled.insert(current, at: 0)
+                activeQueue = shuffled
+            } else {
+                activeQueue = unshuffleQueue.shuffled()
+            }
+        } else {
+            activeQueue = unshuffleQueue
+        }
+    }
+    
+    func playNext(engine: AudioEngineManager) {
+        guard let current = engine.currentTrack else { return }
+        if activeQueue.isEmpty {
+            // Fallback
+            if let idx = tracks.firstIndex(where: { $0.id == current.id }) {
+                let nextIdx = (idx + 1) % tracks.count
+                engine.playTrack(tracks[nextIdx])
+            }
+            return
+        }
+        guard let idx = activeQueue.firstIndex(where: { $0.id == current.id }) else { return }
+        let nextIdx = (idx + 1) % activeQueue.count
+        engine.playTrack(activeQueue[nextIdx])
+    }
+    
+    func playPrevious(engine: AudioEngineManager) {
+        guard let current = engine.currentTrack else { return }
+        if activeQueue.isEmpty {
+            // Fallback
+            if let idx = tracks.firstIndex(where: { $0.id == current.id }) {
+                let prevIdx = (idx - 1 + tracks.count) % tracks.count
+                engine.playTrack(tracks[prevIdx])
+            }
+            return
+        }
+        guard let idx = activeQueue.firstIndex(where: { $0.id == current.id }) else { return }
+        let prevIdx = (idx - 1 + activeQueue.count) % activeQueue.count
+        engine.playTrack(activeQueue[prevIdx])
     }
     @Published var searchKeyword: String = ""
     @Published var sortCriteria: String = "dateAdded" // "dateAdded", "title", "artist", "album", "playCount", "duration"
@@ -117,6 +353,7 @@ class AppStateManager: ObservableObject {
     // Core settings mapped from user preferences settings panel
     @Published var currentThemeName: String = "Space Gray"
     @Published var autoScrollLyrics: Bool = true
+    @Published var showDockArtwork: Bool = false
     @Published var enableAtmos: Bool = true
     @Published var eqMode: String = "Flat (Default Lossless)"
     @Published var crossfadeGap: Double = 4.0
@@ -174,6 +411,66 @@ class AppStateManager: ObservableObject {
                 cardBackground: Color(red: 0.08, green: 0.04, blue: 0.14),
                 isDark: true
             )
+        case "True Black":
+            return ThemeColor(
+                background: .black,
+                sidebarBackground: .black,
+                textPrimary: .white,
+                textSecondary: Color.white.opacity(0.6),
+                accent: .white,
+                cardBackground: Color(white: 0.03),
+                isDark: true
+            )
+        case "Midnight Blue":
+            return ThemeColor(
+                background: Color(red: 0.0, green: 0.04, blue: 0.09),
+                sidebarBackground: Color(red: 0.0, green: 0.07, blue: 0.15),
+                textPrimary: Color(red: 0.88, green: 0.91, blue: 0.94),
+                textSecondary: Color(red: 0.88, green: 0.91, blue: 0.94).opacity(0.6),
+                accent: Color(red: 0.22, green: 0.74, blue: 0.97),
+                cardBackground: Color(red: 0.0, green: 0.09, blue: 0.19),
+                isDark: true
+            )
+        case "Y2K / Skeuomorphic (Frutiger Aero)":
+            return ThemeColor(
+                background: Color(red: 0.89, green: 0.96, blue: 0.98),
+                sidebarBackground: Color(red: 0.95, green: 0.98, blue: 1.0),
+                textPrimary: Color(red: 0.05, green: 0.23, blue: 0.40),
+                textSecondary: Color(red: 0.05, green: 0.23, blue: 0.40).opacity(0.6),
+                accent: Color(red: 0.13, green: 0.59, blue: 0.95),
+                cardBackground: .white,
+                isDark: false
+            )
+        case "Cyberpunk":
+            return ThemeColor(
+                background: Color(red: 0.06, green: 0.06, blue: 0.08),
+                sidebarBackground: Color(red: 0.08, green: 0.08, blue: 0.11),
+                textPrimary: Color(red: 1.0, green: 0.92, blue: 0.23),
+                textSecondary: Color(red: 1.0, green: 0.92, blue: 0.23).opacity(0.6),
+                accent: Color(red: 0.0, green: 0.90, blue: 1.0),
+                cardBackground: Color(red: 0.11, green: 0.11, blue: 0.14),
+                isDark: true
+            )
+        case "Vaporwave":
+            return ThemeColor(
+                background: Color(red: 0.90, green: 0.80, blue: 0.95),
+                sidebarBackground: Color(red: 0.95, green: 0.90, blue: 0.98),
+                textPrimary: Color(red: 0.29, green: 0.08, blue: 0.29),
+                textSecondary: Color(red: 0.29, green: 0.08, blue: 0.29).opacity(0.6),
+                accent: Color(red: 0.78, green: 0.15, blue: 1.0),
+                cardBackground: Color.white.opacity(0.5),
+                isDark: false
+            )
+        case "Warm Coffee":
+            return ThemeColor(
+                background: Color(red: 0.96, green: 0.92, blue: 0.87),
+                sidebarBackground: Color(red: 0.92, green: 0.87, blue: 0.80),
+                textPrimary: Color(red: 0.29, green: 0.23, blue: 0.20),
+                textSecondary: Color(red: 0.29, green: 0.23, blue: 0.20).opacity(0.6),
+                accent: Color(red: 0.55, green: 0.35, blue: 0.17),
+                cardBackground: Color(red: 0.98, green: 0.93, blue: 0.85),
+                isDark: false
+            )
         default: // Space Gray / Classic Dark
             return ThemeColor(
                 background: Color(red: 0.09, green: 0.09, blue: 0.11),
@@ -188,10 +485,73 @@ class AppStateManager: ObservableObject {
     }
     
     @Published var playlists: [Playlist] = [
-        Playlist(name: "Favorites (Apple Music)", description: "Imported from Apple Music App preferences", isImported: true, tracks: [])
+        Playlist(name: "Favorites (Apple Music)", description: "Imported from Apple Music App preferences", isImported: true, playlistTracks: [])
     ]
     
     @Published var tracks: [LocalTrack] = []
+    
+    func upsertTrack(_ track: LocalTrack) {
+        if let idx = tracks.firstIndex(where: {
+            ($0.fileURL != nil && $0.fileURL?.path == track.fileURL?.path) ||
+            ($0.title == track.title && $0.artist == track.artist && $0.album == track.album)
+        }) {
+            // Update metadata but keep user-specific state like isFavorite, playCount, dateAdded
+            var updated = tracks[idx]
+            updated.title = track.title
+            updated.artist = track.artist
+            updated.album = track.album
+            updated.genre = track.genre
+            updated.duration = track.duration
+            updated.fileURL = track.fileURL
+            updated.coverImageName = track.coverImageName
+            updated.localCoverURL = track.localCoverURL
+            updated.embeddedArtData = track.embeddedArtData
+            updated.isAtmos = track.isAtmos
+            updated.fileSize = track.fileSize
+            updated.lyrics = track.lyrics
+            updated.format = track.format
+            tracks[idx] = updated
+        } else {
+            tracks.insert(track, at: 0)
+        }
+    }
+    
+    func addTrackToPlaylist(track: LocalTrack, playlistId: UUID) {
+        if let idx = playlists.firstIndex(where: { $0.id == playlistId }) {
+            playlists[idx].playlistTracks.append(PlaylistTrack(track: track))
+        }
+    }
+    
+    func createNewPlaylist(name: String, initialTrack: LocalTrack? = nil) {
+        var newPlaylist = Playlist(name: name, description: "", isImported: false, playlistTracks: [])
+        if let track = initialTrack {
+            newPlaylist.playlistTracks.append(PlaylistTrack(track: track))
+        }
+        playlists.append(newPlaylist)
+    }
+    
+    func deletePlaylist(_ id: UUID) {
+        guard let index = playlists.firstIndex(where: { $0.id == id }) else { return }
+        let playlist = playlists[index]
+        playlists.remove(at: index)
+        
+        if removePlaylistSongsFromLibrary {
+            let trackIds = Set(playlist.tracks.map { $0.id })
+            tracks.removeAll { trackIds.contains($0.id) }
+        }
+        if selectedTab == "playlist-\(id.uuidString)" {
+            selectedTab = "songs"
+        }
+    }
+    
+    func removeTrackFromPlaylist(trackId: UUID, playlistId: UUID) {
+        guard let index = playlists.firstIndex(where: { $0.id == playlistId }) else { return }
+        playlists[index].playlistTracks.removeAll { $0.track.id == trackId }
+        
+        if removePlaylistSongsFromLibrary {
+            tracks.removeAll { $0.id == trackId }
+        }
+    }
     
     func toggleFavorite(track: LocalTrack) {
         if let idx = tracks.firstIndex(where: { $0.id == track.id }) {
@@ -208,6 +568,16 @@ class AppStateManager: ObservableObject {
         return dict.map { (key, list) in
             LocalAlbum(name: key, artist: list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.first!)
         }.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+    
+    var recentlyAddedAlbumsList: [LocalAlbum] {
+        var dict: [String: [LocalTrack]] = [:]
+        for track in tracks {
+            dict[track.album, default: []].append(track)
+        }
+        return dict.map { (key, list) in
+            LocalAlbum(name: key, artist: list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.max(by: { $0.dateAdded < $1.dateAdded })!)
+        }.sorted { $0.trackRepresentative.dateAdded > $1.trackRepresentative.dateAdded }
     }
     
     var artistsList: [LocalArtist] {
