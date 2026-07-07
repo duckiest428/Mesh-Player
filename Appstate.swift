@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 //
 //  AppState.swift
 //  macOS Music Player
@@ -19,8 +21,8 @@ import iTunesLibrary
 
 // MARK: - Models
 
-struct LocalTrack: Identifiable, Hashable {
-    let id: UUID = UUID()
+struct LocalTrack: Identifiable, Hashable, Codable {
+    var id: UUID = UUID()
     var title: String
     var artist: String
     var album: String
@@ -37,15 +39,58 @@ struct LocalTrack: Identifiable, Hashable {
     var isFavorite: Bool = false
     var playCount: Int = 0
     var format: String = "AAC 256kbps"
+    var discNumber: Int = 1
+    var trackNumber: Int = 0
+    var copyright: String? = nil
+    var publisher: String? = nil
+    var year: Int? = nil
+    var artworkColors: [String]? = nil
+    var bitRate: Int? = nil
+    var sampleRate: Double? = nil
+    var channels: Int? = nil
+    var bitDepth: Int? = nil
+    
+    var parsedTrackNumber: Int {
+        if trackNumber > 0 { return trackNumber }
+        
+        let pattern = "^\\s*0*(\\d+)"
+        
+        let filename = fileURL!.deletingPathExtension().lastPathComponent
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+           let match = regex.firstMatch(in: filename, options: [], range: NSRange(location: 0, length: filename.utf16.count)) {
+            let numStr = (filename as NSString).substring(with: match.range(at: 1))
+            if let num = Int(numStr) {
+                return num
+            }
+        }
+        
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+           let match = regex.firstMatch(in: title, options: [], range: NSRange(location: 0, length: title.utf16.count)) {
+            let numStr = (title as NSString).substring(with: match.range(at: 1))
+            if let num = Int(numStr) {
+                return num
+            }
+        }
+        
+        return 9999
+    }
+    
+    var cleanTitle: String {
+        let pattern = "^\\s*\\d+[-_.]?\\s*"
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+            return regex.stringByReplacingMatches(in: title, options: [], range: NSRange(location: 0, length: title.utf16.count), withTemplate: "")
+        }
+        return title
+    }
 }
 
-struct PlaylistTrack: Identifiable, Hashable {
-    let id: UUID = UUID()
+struct PlaylistTrack: Identifiable, Hashable, Codable {
+    var id: UUID = UUID()
     var track: LocalTrack
 }
 
-struct Playlist: Identifiable, Hashable {
-    let id: UUID = UUID()
+struct Playlist: Identifiable, Hashable, Codable {
+    var id: UUID = UUID()
     var name: String
     var description: String
     var isImported: Bool
@@ -284,7 +329,49 @@ class AppStateManager: ObservableObject {
     @Published var activeQueue: [LocalTrack] = []
     @Published var unshuffleQueue: [LocalTrack] = []
     @Published var isQueueShuffled: Bool = false
+    @Published var repeatMode: Int = 0 // 0 = off, 1 = all, 2 = one
     @Published var removePlaylistSongsFromLibrary: Bool = false
+    
+    // Album Sorting
+    enum AlbumSortCriteria: String, CaseIterable {
+        case dateAdded = "Date Added"
+        case yearReleased = "Year Released"
+        case title = "Title"
+        case artist = "Artist"
+    }
+    @Published var albumSortCriteria: AlbumSortCriteria = .dateAdded
+    
+    // Global Idle Tracker
+    @Published var isIdle = false
+    private var interactionTimer: Timer?
+    private var eventMonitor: Any?
+    
+    init() {
+        self.loadContext()
+        self.setupIdleMonitor()
+    }
+    
+    private func setupIdleMonitor() {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] event in
+            self?.resetIdleTimer()
+            return event
+        }
+        resetIdleTimer()
+    }
+    
+    private func resetIdleTimer() {
+        isIdle = false
+        interactionTimer?.invalidate()
+        interactionTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { [weak self] _ in
+            self?.isIdle = true
+        }
+    }
+    
+    deinit {
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
     
     // Manage active queue tracking
     func setQueue(tracks: [LocalTrack], startTrack: LocalTrack) {
@@ -295,6 +382,53 @@ class AppStateManager: ObservableObject {
             activeQueue = shuffled
         } else {
             activeQueue = tracks
+        }
+    }
+    
+    // Write-behind engine
+    func saveContext() {
+        let encoder = JSONEncoder()
+        let libraryDir = LibraryManager.shared.libraryDirectory
+        let dbFile = libraryDir.appendingPathComponent("database.sqlite")
+        
+        let safeTracks = self.tracks
+        let safePlaylists = self.playlists
+        
+        do {
+            struct DatabaseDump: Codable {
+                var tracks: [LocalTrack]
+                var playlists: [Playlist]
+            }
+            
+            let dump = DatabaseDump(tracks: safeTracks, playlists: safePlaylists)
+            let data = try encoder.encode(dump)
+            try data.write(to: dbFile, options: .atomic)
+        } catch {
+            print("Failed context.save(): \(error)")
+        }
+    }
+    
+    func loadContext() {
+        let libraryDir = LibraryManager.shared.libraryDirectory
+        let dbFile = libraryDir.appendingPathComponent("database.sqlite")
+        
+        guard FileManager.default.fileExists(atPath: dbFile.path) else { return }
+        
+        do {
+            let data = try Data(contentsOf: dbFile)
+            struct DatabaseDump: Codable {
+                var tracks: [LocalTrack]
+                var playlists: [Playlist]
+            }
+            let decoder = JSONDecoder()
+            let dump = try decoder.decode(DatabaseDump.self, from: data)
+            
+            DispatchQueue.main.async {
+                self.tracks = dump.tracks
+                self.playlists = dump.playlists
+            }
+        } catch {
+            print("Failed loadContext(): \(error)")
         }
     }
     
@@ -315,32 +449,58 @@ class AppStateManager: ObservableObject {
     
     func playNext(engine: AudioEngineManager) {
         guard let current = engine.currentTrack else { return }
-        if activeQueue.isEmpty {
-            // Fallback
-            if let idx = tracks.firstIndex(where: { $0.id == current.id }) {
-                let nextIdx = (idx + 1) % tracks.count
-                engine.playTrack(tracks[nextIdx])
-            }
+        
+        if repeatMode == 2 {
+            engine.playTrack(current)
             return
         }
-        guard let idx = activeQueue.firstIndex(where: { $0.id == current.id }) else { return }
-        let nextIdx = (idx + 1) % activeQueue.count
-        engine.playTrack(activeQueue[nextIdx])
+        
+        let queueToUse = activeQueue.isEmpty ? tracks : activeQueue
+        if queueToUse.isEmpty { return }
+        
+        if let idx = queueToUse.firstIndex(where: { $0.id == current.id }) {
+            let nextIdx = idx + 1
+            if nextIdx < queueToUse.count {
+                engine.playTrack(queueToUse[nextIdx])
+            } else {
+                if repeatMode == 1 {
+                    engine.playTrack(queueToUse[0])
+                } else {
+                    engine.pause() // stop at end of queue
+                }
+            }
+        }
     }
     
     func playPrevious(engine: AudioEngineManager) {
         guard let current = engine.currentTrack else { return }
-        if activeQueue.isEmpty {
-            // Fallback
-            if let idx = tracks.firstIndex(where: { $0.id == current.id }) {
-                let prevIdx = (idx - 1 + tracks.count) % tracks.count
-                engine.playTrack(tracks[prevIdx])
-            }
+        
+        // If we are more than 3 seconds in, previous resets the track
+        if engine.currentTime > 3.0 {
+            engine.seek(to: 0)
             return
         }
-        guard let idx = activeQueue.firstIndex(where: { $0.id == current.id }) else { return }
-        let prevIdx = (idx - 1 + activeQueue.count) % activeQueue.count
-        engine.playTrack(activeQueue[prevIdx])
+        
+        if repeatMode == 2 {
+            engine.playTrack(current)
+            return
+        }
+        
+        let queueToUse = activeQueue.isEmpty ? tracks : activeQueue
+        if queueToUse.isEmpty { return }
+        
+        if let idx = queueToUse.firstIndex(where: { $0.id == current.id }) {
+            let prevIdx = idx - 1
+            if prevIdx >= 0 {
+                engine.playTrack(queueToUse[prevIdx])
+            } else {
+                if repeatMode == 1 {
+                    engine.playTrack(queueToUse[queueToUse.count - 1])
+                } else {
+                    engine.seek(to: 0)
+                }
+            }
+        }
     }
     @Published var searchKeyword: String = ""
     @Published var sortCriteria: String = "dateAdded" // "dateAdded", "title", "artist", "album", "playCount", "duration"
@@ -648,7 +808,15 @@ class AppStateManager: ObservableObject {
             case "artist":
                 isLess = a.artist.localizedCompare(b.artist) == .orderedAscending
             case "album":
-                isLess = a.album.localizedCompare(b.album) == .orderedAscending
+                if a.album == b.album {
+                    if a.discNumber != b.discNumber {
+                        isLess = a.discNumber < b.discNumber
+                    } else {
+                        isLess = a.parsedTrackNumber < b.parsedTrackNumber
+                    }
+                } else {
+                    isLess = a.album.localizedCompare(b.album) == .orderedAscending
+                }
             case "playCount":
                 isLess = a.playCount < b.playCount
             case "duration":
@@ -763,4 +931,7 @@ struct DolbyAtmosBadge: View {
         .cornerRadius(4 * scale)
     }
 }
+
+
+
 
