@@ -39,23 +39,8 @@ struct SongTableView: View {
                             .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
                         
                         if let firstTrack = playlist.tracks.first {
-                            if let data = firstTrack.embeddedArtData, let nsImage = NSImage(data: data) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 220, height: 220)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                            } else if let localCoverURL = firstTrack.localCoverURL, let nsImage = NSImage(contentsOf: localCoverURL) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 220, height: 220)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                            } else {
-                                Image(systemName: "music.note.list")
-                                    .font(.system(size: 80))
-                                    .foregroundColor(state.theme.textSecondary.opacity(0.5))
-                            }
+                            AsyncFlexibleThumbnailView(track: firstTrack, maxPixelSize: 440, theme: state.theme, cornerRadius: 12)
+                                .frame(width: 220, height: 220)
                         } else {
                             Image(systemName: "music.note.list")
                                 .font(.system(size: 80))
@@ -129,13 +114,10 @@ struct SongTableView: View {
                 .background(
                     ZStack {
                         if let firstTrack = playlist.tracks.first {
-                            if let data = firstTrack.embeddedArtData, let nsImage = NSImage(data: data) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .blur(radius: 60)
-                                    .opacity(0.15)
-                            }
+                            AsyncFlexibleThumbnailView(track: firstTrack, maxPixelSize: 600, theme: state.theme, cornerRadius: 0)
+                                .aspectRatio(contentMode: .fill)
+                                .blur(radius: 60)
+                                .opacity(0.15)
                         }
                         LinearGradient(gradient: Gradient(colors: [state.theme.background.opacity(0.0), state.theme.background]), startPoint: .top, endPoint: .bottom)
                     }
@@ -192,7 +174,9 @@ struct SongTableView: View {
                 .buttonStyle(.bordered)
                 .help("Toggle sorting direction")
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+            .padding(.top, (state.selectedTab?.hasPrefix("playlist-") == true) ? 8 : 0)
             .background(Color.secondary.opacity(0.04))
             
             Divider()
@@ -652,33 +636,36 @@ struct AnimatedEQView: View {
     let color: Color
     let isPlaying: Bool
     
-    @State private var heights: [CGFloat] = [0, 0, 0]
-    let timer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
+    @State private var phase: Bool = false
     
     var body: some View {
         HStack(spacing: 2) {
             RoundedRectangle(cornerRadius: 1)
                 .fill(color)
-                .frame(width: 3, height: isPlaying ? heights[0] : 0)
+                .frame(width: 3, height: isPlaying ? (phase ? 12 : 3) : 0)
+                .animation(isPlaying ? .easeInOut(duration: 0.2).repeatForever(autoreverses: true) : .default, value: phase)
             
             RoundedRectangle(cornerRadius: 1)
                 .fill(color)
-                .frame(width: 3, height: isPlaying ? heights[1] : 0)
+                .frame(width: 3, height: isPlaying ? (phase ? 4 : 12) : 0)
+                .animation(isPlaying ? .easeInOut(duration: 0.25).repeatForever(autoreverses: true).delay(0.1) : .default, value: phase)
             
             RoundedRectangle(cornerRadius: 1)
                 .fill(color)
-                .frame(width: 3, height: isPlaying ? heights[2] : 0)
+                .frame(width: 3, height: isPlaying ? (phase ? 10 : 5) : 0)
+                .animation(isPlaying ? .easeInOut(duration: 0.22).repeatForever(autoreverses: true).delay(0.05) : .default, value: phase)
         }
         .frame(height: 12, alignment: .bottom)
-        .animation(.easeInOut(duration: 0.15), value: heights)
-        .animation(.easeInOut(duration: 0.3), value: isPlaying)
-        .onReceive(timer) { _ in
+        .onChange(of: isPlaying) { playing in
+            if playing {
+                phase.toggle()
+            } else {
+                phase = false
+            }
+        }
+        .onAppear {
             if isPlaying {
-                heights = [
-                    CGFloat.random(in: 3...12),
-                    CGFloat.random(in: 4...12),
-                    CGFloat.random(in: 3...12)
-                ]
+                phase.toggle()
             }
         }
     }
