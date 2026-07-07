@@ -1,3 +1,4 @@
+
 //
 //  AudioEngineManager.swift
 //  macOS Music Player
@@ -11,9 +12,16 @@ import Combine
 import AVFoundation
 import MediaPlayer
 
+class AudioTimeTracker: ObservableObject {
+    @Published var currentTime: TimeInterval = 0.0
+}
+
+
+
 class AudioEngineManager: ObservableObject {
     @Published var isPlaying: Bool = false
-    @Published var currentTime: TimeInterval = 0.0
+    var currentTime: TimeInterval { return timeTracker.currentTime }
+    let timeTracker = AudioTimeTracker()
     @Published var duration: TimeInterval = 0.0
     @Published var volume: Float = 0.8 {
         didSet {
@@ -24,9 +32,6 @@ class AudioEngineManager: ObservableObject {
     @Published var isAtmosTrack: Bool = false
     @Published var currentTrack: LocalTrack?
     @Published var parsedLyrics: [SyncedLyricLine] = []
-    
-    // Wave animation levels for UI visualizer
-    @Published var frequencyLevels: [CGFloat] = Array(repeating: 0.1, count: 20)
     
     // Hardware Routing
     @Published var availableOutputs: [SwiftOutputDevice] = []
@@ -43,7 +48,6 @@ class AudioEngineManager: ObservableObject {
     // Core Change: Replaced AVAudioPlayer with AVPlayer for system spatial routing
     private var player: AVPlayer?
     private var timeObserverToken: Any?
-    private var visualizerTimer: Timer?
     
     // Handlers for remote commands
     var onPlayNext: (() -> Void)?
@@ -128,9 +132,8 @@ class AudioEngineManager: ObservableObject {
             guard let self = self else { return .commandFailed }
             if !self.isPlaying {
                 self.togglePlayPause()
-                return .success
             }
-            return .commandFailed
+            return .success
         }
         
         commandCenter.pauseCommand.isEnabled = true
@@ -138,9 +141,8 @@ class AudioEngineManager: ObservableObject {
             guard let self = self else { return .commandFailed }
             if self.isPlaying {
                 self.togglePlayPause()
-                return .success
             }
-            return .commandFailed
+            return .success
         }
         
         commandCenter.togglePlayPauseCommand.isEnabled = true
@@ -153,7 +155,8 @@ class AudioEngineManager: ObservableObject {
         commandCenter.nextTrackCommand.isEnabled = true
         commandCenter.nextTrackCommand.addTarget { [weak self] event in
             guard let self = self else { return .commandFailed }
-            self.onPlayNext?()
+            if let track = self.currentTrack { self.onTrackFinished?(track) }
+                self.onPlayNext?()
             return .success
         }
         
@@ -176,7 +179,7 @@ class AudioEngineManager: ObservableObject {
         
         self.currentTrack = track
         self.duration = track.duration
-        self.currentTime = 0.0
+        self.timeTracker.currentTime = 0.0
         self.isAtmosTrack = track.isAtmos
         self.parsedLyrics = LyricsEngine.parse(lyricsText: track.lyrics, duration: track.duration)
         
@@ -240,8 +243,13 @@ class AudioEngineManager: ObservableObject {
             NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main) { [weak self] _ in
                 guard let self = self else { return }
                 self.isPlaying = false
-                self.stopVisualizerTimer()
-                self.updateNowPlayingInfo()
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = [:]
+                MPNowPlayingInfoCenter.default().playbackState = .stopped
+                
+                // Re-initialize player cleanly
+                self.player = nil
+                
+                if let track = self.currentTrack { self.onTrackFinished?(track) }
                 self.onPlayNext?()
             }
             
@@ -249,43 +257,55 @@ class AudioEngineManager: ObservableObject {
             self.player?.play()
             
             self.isPlaying = true
+            
+            // Scrobbling Broadcast
+            let center = DistributedNotificationCenter.default()
+            let userInfo: [String: Any] = [
+                "Player State": "Playing",
+                "Title": track.title,
+                "Artist": track.artist,
+                "Album": track.album,
+                "Total Time": Int(track.duration * 1000)
+            ]
+            center.postNotificationName(NSNotification.Name("com.apple.iTunes.playerInfo"), object: "com.apple.iTunes.player", userInfo: userInfo, deliverImmediately: true)
+            
+            updateNowPlayingInfo()
             startTimeObservers()
-            startVisualizerTimer()
         } else {
             // Simulated local file play preview fallback
             self.isPlaying = true
             startTimeObservers()
-            startVisualizerTimer()
         }
         
         updateNowPlayingInfo()
     }
     
     func togglePlayPause() {
-        guard let player = player else {
-            // Handle mock fallback toggling
-            isPlaying.toggle()
-            if isPlaying {
-                startTimeObservers()
-                startVisualizerTimer()
-            } else {
-                stopVisualizerTimer()
-            }
-            updateNowPlayingInfo()
-            return
-        }
-        
         if isPlaying {
-            player.pause()
-            isPlaying = false
-            stopVisualizerTimer()
+            pause()
         } else {
-            player.play()
-            isPlaying = true
-            startTimeObservers()
-            startVisualizerTimer()
+            play()
         }
+    }
+    
+    func pause() {
+        guard isPlaying else { return }
         
+        if let player = player {
+            player.pause()
+        }
+        isPlaying = false
+        updateNowPlayingInfo()
+    }
+    
+    func play() {
+        guard !isPlaying else { return }
+        
+        if let player = player {
+            player.play()
+        }
+        isPlaying = true
+        startTimeObservers()
         updateNowPlayingInfo()
     }
     
@@ -306,16 +326,7 @@ class AudioEngineManager: ObservableObject {
         let interval = CMTime(seconds: 0.1, preferredTimescale: 60000)
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self else { return }
-            self.currentTime = time.seconds
-            
-            // Auto-stop mechanics when file reaches boundary limit
-            if self.currentTime >= self.duration - 0.1 {
-                self.player?.pause()
-                self.player?.seek(to: .zero)
-                self.isPlaying = false
-                self.stopVisualizerTimer()
-                self.removeTimeObserver()
-            }
+            self.timeTracker.currentTime = time.seconds
         }
     }
     
@@ -326,28 +337,6 @@ class AudioEngineManager: ObservableObject {
         }
     }
     
-    private func startVisualizerTimer() {
-        stopVisualizerTimer()
-        
-        visualizerTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if self.isPlaying {
-                self.frequencyLevels = (0..<20).map { _ in
-                    CGFloat.random(in: 0.15...0.95)
-                }
-            } else {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    self.frequencyLevels = Array(repeating: 0.05, count: 20)
-                }
-            }
-        }
-    }
-    
-    private func stopVisualizerTimer() {
-        visualizerTimer?.invalidate()
-        visualizerTimer = nil
-    }
-    
     func parseTrackMetadata(from url: URL) -> LocalTrack {
         let asset = AVAsset(url: url)
         var title = url.deletingPathExtension().lastPathComponent
@@ -356,9 +345,16 @@ class AudioEngineManager: ObservableObject {
         var genre = "Alternative"
         var embeddedArtData: Data? = nil
         var duration: TimeInterval = CMTimeGetSeconds(asset.duration)
+        var discNumber = 1
+        var trackNumber = 0
+        var copyright: String? = nil
+        var publisher: String? = nil
+        var year: Int? = nil
         
         for format in asset.availableMetadataFormats {
             for metadataItem in asset.metadata(forFormat: format) {
+                let keyStr = String(describing: metadataItem.key).lowercased()
+                
                 if let commonKey = metadataItem.commonKey {
                     switch commonKey {
                     case .commonKeyTitle:
@@ -367,13 +363,118 @@ class AudioEngineManager: ObservableObject {
                         if let value = metadataItem.stringValue { artist = value }
                     case .commonKeyAlbumName:
                         if let value = metadataItem.stringValue { album = value }
+                    case .commonKeyCopyrights:
+                        if let value = metadataItem.stringValue { copyright = value }
+                    case .commonKeyPublisher:
+                        if let value = metadataItem.stringValue { publisher = value }
                     case .commonKeyArtwork:
                         if let value = metadataItem.dataValue { embeddedArtData = value }
+                    case .commonKeyCreationDate:
+                        if let value = metadataItem.stringValue, let parsedYear = Int(value.prefix(4)) { year = parsedYear }
                     default:
                         break
                     }
                 }
+                
+                // Aggressive fallback for copyright using key string
+                if copyright == nil {
+                    if keyStr.contains("copy") || keyStr.contains("cprt") || keyStr.contains("cpy") || keyStr.contains("©cpy") || keyStr.contains("©cpr") {
+                        if let value = metadataItem.stringValue {
+                            copyright = value
+                        }
+                    }
+                }
+                
+                if let identifier = metadataItem.identifier {
+                    let idStr = identifier.rawValue
+                    if idStr.contains("trackNumber") || idStr.contains("trkn") {
+                        if let data = metadataItem.dataValue, data.count >= 4 {
+                            trackNumber = Int(data[3])
+                        } else if let num = metadataItem.numberValue {
+                            trackNumber = num.intValue
+                        } else if let str = metadataItem.stringValue, let num = Int(str.split(separator: "/").first ?? "") {
+                            trackNumber = num
+                        }
+                    } else if idStr.contains("discNumber") || idStr.contains("disk") {
+                        if let data = metadataItem.dataValue, data.count >= 4 {
+                            discNumber = Int(data[3])
+                        } else if let num = metadataItem.numberValue {
+                            discNumber = num.intValue
+                        } else if let str = metadataItem.stringValue, let num = Int(str.split(separator: "/").first ?? "") {
+                            discNumber = num
+                        }
+                    } else if idStr.lowercased().contains("copyright") || idStr.lowercased().contains("cprt") {
+                        if let valueStr = metadataItem.stringValue { copyright = valueStr }
+                    } else if idStr.lowercased().contains("year") || idStr.lowercased().contains("date") {
+                        if let valueStr = metadataItem.stringValue, let parsedYear = Int(valueStr.prefix(4)) { year = parsedYear }
+                    }
+                }
+                
+                if let keySpace = metadataItem.keySpace, let key = metadataItem.key {
+                    if keySpace == AVMetadataKeySpace.id3 {
+                        if String(describing: key) == "TPOS" { // ID3v2 part of a set
+                            if let valueStr = metadataItem.stringValue {
+                                let parts = valueStr.split(separator: "/")
+                                if let first = parts.first, let num = Int(first) { discNumber = num }
+                            }
+                        } else if String(describing: key) == "TRCK" { // ID3v2 track number
+                            if let valueStr = metadataItem.stringValue {
+                                let parts = valueStr.split(separator: "/")
+                                if let first = parts.first, let num = Int(first) { trackNumber = num }
+                            }
+                        } else if String(describing: key) == "TPUB" { // ID3v2 publisher
+                            if let valueStr = metadataItem.stringValue { publisher = valueStr }
+                        } else if String(describing: key) == "TCOP" { // ID3v2 copyright
+                            if let valueStr = metadataItem.stringValue { copyright = valueStr }
+                        } else if String(describing: key) == "TYER" || String(describing: key) == "TDRC" { // ID3v2 year/recording time
+                            if let valueStr = metadataItem.stringValue, let parsedYear = Int(valueStr.prefix(4)) { year = parsedYear }
+                        }
+                    } else if keySpace == AVMetadataKeySpace.iTunes {
+                        if String(describing: key) == "disk" {
+                            if let data = metadataItem.dataValue, data.count >= 4 {
+                                discNumber = Int(data[3])
+                            } else if let num = metadataItem.numberValue {
+                                discNumber = num.intValue
+                            }
+                        } else if String(describing: key) == "trkn" {
+                            if let data = metadataItem.dataValue, data.count >= 4 {
+                                trackNumber = Int(data[3])
+                            } else if let num = metadataItem.numberValue {
+                                trackNumber = num.intValue
+                            }
+                        } else if String(describing: key) == "cprt" || String(describing: key) == "©cpr" {
+                            if let valueStr = metadataItem.stringValue { copyright = valueStr }
+                        } else if String(describing: key) == "day" || String(describing: key) == "©day" {
+                            if let valueStr = metadataItem.stringValue, let parsedYear = Int(valueStr.prefix(4)) { year = parsedYear }
+                        }
+                    }
+                }
             }
+        }
+        
+        var bitRate: Int? = nil
+        var sampleRate: Double? = nil
+        var channels: Int? = nil
+        var bitDepth: Int? = nil
+        
+        do {
+            let audioFile = try AVAudioFile(forReading: url)
+            let format = audioFile.fileFormat
+            sampleRate = format.sampleRate
+            channels = Int(format.channelCount)
+            let streamDesc = format.streamDescription.pointee
+            bitDepth = Int(streamDesc.mBitsPerChannel)
+            
+            // Calculate bitrate from file size if we have duration
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            if let fileSize = attributes[.size] as? NSNumber {
+                if duration > 0 {
+                    let bits = Double(fileSize.intValue) * 8.0
+                    bitRate = Int(bits / duration / 1000.0) // kbps
+                }
+            }
+        } catch {
+            print("Failed to read audio file format: \(error)")
         }
         
         let formatStr = url.pathExtension.uppercased()
@@ -395,12 +496,20 @@ class AudioEngineManager: ObservableObject {
             lyrics: "",
             isFavorite: false,
             playCount: 0,
-            format: isLossless ? "Lossless" : formatStr
+            format: isLossless ? "Lossless" : formatStr,
+            discNumber: discNumber,
+            trackNumber: trackNumber,
+            copyright: copyright,
+            publisher: publisher,
+            year: year,
+            bitRate: bitRate,
+            sampleRate: sampleRate,
+            channels: channels,
+            bitDepth: bitDepth
         )
     }
     
     deinit {
         removeTimeObserver()
-        stopVisualizerTimer()
     }
 }
