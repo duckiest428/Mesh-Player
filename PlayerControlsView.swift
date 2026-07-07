@@ -11,6 +11,7 @@ import SwiftUI
 struct PlayerControlsView: View {
     @ObservedObject var state: AppStateManager
     @ObservedObject var engine: AudioEngineManager
+    @ObservedObject var timeTracker: AudioTimeTracker
     @Binding var showFullscreen: Bool
     @Binding var showSettings: Bool
     @Environment(\.openWindow) private var openWindow
@@ -40,23 +41,8 @@ struct PlayerControlsView: View {
                             .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1)
                         
                         if let track = engine.currentTrack {
-                            if let artData = track.embeddedArtData, let nsImage = NSImage(data: artData) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 72, height: 72)
-                                    .cornerRadius(10)
-                            } else if let imageURL = track.localCoverURL, let nsImage = NSImage(contentsOf: imageURL) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 72, height: 72)
-                                    .cornerRadius(10)
-                            } else {
-                                Image(systemName: track.coverImageName)
-                                    .foregroundColor(state.theme.accent)
-                                    .font(.system(size: 26))
-                            }
+                            AsyncFlexibleThumbnailView(track: track, maxPixelSize: 144, theme: state.theme, cornerRadius: 10)
+                                .frame(width: 72, height: 72)
                         } else {
                             Image(systemName: "music.note")
                                 .font(.system(size: 26))
@@ -152,33 +138,25 @@ struct PlayerControlsView: View {
             // 2. Timeline progress Scrubber (Center Aligned, fills available workspace)
             VStack(spacing: 4) {
                 HStack {
-                    Text(formatTime(engine.currentTime))
+                    Text(formatTime(timeTracker.currentTime))
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(state.theme.textSecondary)
                     
                     Spacer()
                     
-                    if engine.isAtmosTrack {
-                        DolbyAtmosBadge(color: state.theme.textPrimary.opacity(0.85), scale: 1.0, showText: true)
-                    } else if let track = engine.currentTrack {
-                        Text(track.format)
-                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(state.theme.textPrimary.opacity(0.06))
-                            .cornerRadius(3)
-                            .foregroundColor(state.theme.textSecondary.opacity(0.85))
+                    if let track = engine.currentTrack {
+                        AudioQualityTagsView(track: track, theme: state.theme)
                     }
                     
                     Spacer()
                     
-                    Text("-" + formatTime(max(0, engine.duration - engine.currentTime)))
+                    Text("-" + formatTime(max(0, engine.duration - timeTracker.currentTime)))
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(state.theme.textSecondary)
                 }
                 
                 Slider(value: Binding(
-                    get: { engine.currentTime },
+                    get: { timeTracker.currentTime },
                     set: { engine.seek(to: $0) }
                 ), in: 0...max(0.1, engine.duration))
                 .accentColor(state.theme.accent)
@@ -258,6 +236,16 @@ struct PlayerControlsView: View {
                 }
                 .buttonStyle(PremiumButtonStyle())
                 .help("Shuffle")
+                
+                Button(action: {
+                    state.repeatMode = (state.repeatMode + 1) % 3
+                }) {
+                    Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat")
+                        .font(.body)
+                        .foregroundColor(state.repeatMode > 0 ? state.theme.accent : state.theme.textSecondary)
+                }
+                .buttonStyle(PremiumButtonStyle())
+                .help(state.repeatMode == 2 ? "Repeat One" : (state.repeatMode == 1 ? "Repeat All" : "Repeat Off"))
                 
                 let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
                 Button(action: {
