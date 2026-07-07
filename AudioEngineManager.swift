@@ -52,6 +52,7 @@ class AudioEngineManager: ObservableObject {
     // Handlers for remote commands
     var onPlayNext: (() -> Void)?
     var onPlayPrevious: (() -> Void)?
+    var onTrackFinished: ((LocalTrack) -> Void)?
     
     init() {
         setupDeviceRouting()
@@ -310,8 +311,8 @@ class AudioEngineManager: ObservableObject {
     }
     
     func seek(to time: TimeInterval) {
-        currentTime = max(0, min(time, duration))
-        let targetCMTime = CMTime(seconds: currentTime, preferredTimescale: 60000)
+        timeTracker.currentTime = max(0, min(time, duration))
+        let targetCMTime = CMTime(seconds: timeTracker.currentTime, preferredTimescale: 60000)
         player?.seek(to: targetCMTime, toleranceBefore: .zero, toleranceAfter: .zero)
         
         updateNowPlayingInfo()
