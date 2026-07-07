@@ -9,9 +9,12 @@
 import SwiftUI
 import AVFoundation
 import CoreAudio
+import iTunesLibrary
+internal import UniformTypeIdentifiers
 
 struct SidebarView: View {
     @ObservedObject var state: AppStateManager
+    @ObservedObject var engine: AudioEngineManager
     
     // Store library tabs as state to make them interactive and movable!
     @State private var libraryTabs = ["songs", "albums", "artists", "genres", "recently-added"]
@@ -60,20 +63,210 @@ struct SidebarView: View {
                 }
             }
             
-            Section("Add Music") {
-                NavigationLink(value: "expand-library") {
-                    Label("Expand Library (am-dl)", systemImage: "plus.app.fill")
+            Section("Import") {
+                Button(action: scanLocalMusicDirectory) {
+                     Label("Import Local Folders", systemImage: "folder.badge.plus")
                 }
+                .buttonStyle(.plain)
             }
             
-            Section("Mac Tools") {
-                Button(action: scanLocalMusicDirectory) {
-                     Label("Auto-Scan Local Music", systemImage: "arrow.down.doc.fill")
+            Section("Expand") {
+                Button(action: {
+                    if let url = URL(string: "https://am-dl.pages.dev") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }) {
+                     Label("Download from Apple Music", systemImage: "arrow.down.circle.fill")
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: {
+                    if let url = URL(string: "https://monochrome.tf") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }) {
+                     Label("Download from Amazon Music", systemImage: "arrow.down.circle.fill")
                 }
                 .buttonStyle(.plain)
             }
         }
         .listStyle(.sidebar)
+    }
+    
+    private func processAndImportFile(at url: URL) {
+        let fileExtension = url.pathExtension.lowercased()
+        guard ["mp3", "m4a", "flac", "wav", "aiff"].contains(fileExtension) else { return }
+        
+        var track = engine.parseTrackMetadata(from: url)
+        
+        let fileDateAdded = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date()
+        var fileSizeString = "Unknown"
+        if let sizeDict = try? FileManager.default.attributesOfItem(atPath: url.path), let size = sizeDict[.size] as? Int64 {
+            fileSizeString = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        }
+        
+        // Ensure format and other specific overrides
+        let asset = AVAsset(url: url)
+        if let audioTrack = asset.tracks(withMediaType: .audio).first {
+            let formatDescriptions = audioTrack.formatDescriptions
+            for desc in formatDescriptions {
+                let formatDesc = desc as! CMFormatDescription
+                let subType = CMFormatDescriptionGetMediaSubType(formatDesc)
+                let byte1 = (subType >> 24) & 0xff
+                let byte2 = (subType >> 16) & 0xff
+                let byte3 = (subType >> 8) & 0xff
+                let byte4 = subType & 0xff
+                if let s1 = UnicodeScalar(byte1), let s2 = UnicodeScalar(byte2), let s3 = UnicodeScalar(byte3), let s4 = UnicodeScalar(byte4) {
+                    let subTypeStr = "\(Character(s1))\(Character(s2))\(Character(s3))\(Character(s4))".trimmingCharacters(in: .whitespaces).lowercased()
+                    if ["ec-3", "ec3", "mlp", "ac-3", "ac3", "atmos"].contains(where: { subTypeStr.contains($0) }) {
+                        track.isAtmos = true
+                        track.format = "Dolby Atmos (\(subTypeStr))"
+                    }
+                }
+            }
+        }
+        
+        track.dateAdded = fileDateAdded
+        track.fileSize = fileSizeString
+        track.lyrics = ""
+        track.isFavorite = false
+        track.playCount = 0
+        
+        DispatchQueue.main.async {
+            self.state.upsertTrack(track)
+            self.state.saveContext()
+        }
+    }
+    
+    private func importAppleMusicPlaylists() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scriptSource = """
+            tell application "Music"
+                set output to ""
+                set allPlaylists to user playlists
+                repeat with p in allPlaylists
+                    set pName to name of p
+                    -- skip standard default ones if you want, but for now take all
+                    set output to output & "PLAYLIST:" & pName & "\\n"
+                    set pTracks to tracks of p
+                    repeat with t in pTracks
+                        try
+                            set loc to location of t
+                            set POSIXloc to POSIX path of loc
+                            set fav to loved of t
+                            set pc to played count of t
+                            set output to output & "TRACK:" & POSIXloc & "|" & fav & "|" & pc & "\\n"
+                        end try
+                    end repeat
+                end repeat
+                return output
+            end tell
+            """
+            
+            var error: NSDictionary?
+            if let scriptObject = NSAppleScript(source: scriptSource) {
+                let output = scriptObject.executeAndReturnError(&error)
+                if let resultString = output.stringValue {
+                    var newPlaylists: [Playlist] = []
+                    var favTracks: [PlaylistTrack] = []
+                    
+                    let lines = resultString.components(separatedBy: .newlines)
+                    var currentPlaylistName: String = ""
+                    var currentTracks: [PlaylistTrack] = []
+                    
+                    for line in lines {
+                        if line.hasPrefix("PLAYLIST:") {
+                            if !currentPlaylistName.isEmpty && !currentTracks.isEmpty {
+                                newPlaylists.append(Playlist(name: currentPlaylistName, description: "Imported from Apple Music", isImported: true, playlistTracks: currentTracks))
+                            }
+                            currentPlaylistName = String(line.dropFirst(9))
+                            currentTracks = []
+                        } else if line.hasPrefix("TRACK:") {
+                            let dataStr = String(line.dropFirst(6))
+                            let parts = dataStr.components(separatedBy: "|")
+                            if parts.count >= 3 {
+                                let path = parts[0]
+                                let isLoved = parts[1] == "true"
+                                let playCount = Int(parts[2]) ?? 0
+                                let fileURL = URL(fileURLWithPath: path)
+                                
+                                if let trackIndex = self.state.tracks.firstIndex(where: { $0.fileURL == fileURL }) {
+                                    let track = self.state.tracks[trackIndex]
+                                    currentTracks.append(PlaylistTrack(track: track))
+                                    
+                                    DispatchQueue.main.async {
+                                        if isLoved {
+                                            self.state.tracks[trackIndex].isFavorite = true
+                                        }
+                                        if playCount > self.state.tracks[trackIndex].playCount {
+                                            self.state.tracks[trackIndex].playCount = playCount
+                                        }
+                                    }
+                                    
+                                    if (isLoved || playCount > 20) && !favTracks.contains(where: { $0.track.id == track.id }) {
+                                        favTracks.append(PlaylistTrack(track: track))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !currentPlaylistName.isEmpty && !currentTracks.isEmpty {
+                        newPlaylists.append(Playlist(name: currentPlaylistName, description: "Imported from Apple Music", isImported: true, playlistTracks: currentTracks))
+                    }
+                    
+                    if !favTracks.isEmpty {
+                        newPlaylists.append(Playlist(name: "Favorites (Apple Music)", description: "Imported from Apple Music App preferences", isImported: true, playlistTracks: favTracks))
+                    }
+                    
+                    DispatchQueue.main.async {
+                        self.state.playlists.append(contentsOf: newPlaylists)
+                        self.state.saveContext()
+                    }
+                } else if let error = error {
+                    print("AppleScript execution failed: \\(error)")
+                }
+            }
+        }
+    }
+    
+    private func syncLibraryViaAppleScript() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scriptSource = """
+            tell application "Music"
+                set output to ""
+                set allTracks to tracks of library playlist 1
+                repeat with t in allTracks
+                    try
+                        set loc to location of t
+                        set POSIXloc to POSIX path of loc
+                        set output to output & POSIXloc & "\\n"
+                    end try
+                end repeat
+                return output
+            end tell
+            """
+            
+            var error: NSDictionary?
+            if let scriptObject = NSAppleScript(source: scriptSource) {
+                let output = scriptObject.executeAndReturnError(&error)
+                if let resultString = output.stringValue {
+                    let lines = resultString.components(separatedBy: .newlines).filter { !$0.isEmpty }
+                    for line in lines {
+                        let fileURL = URL(fileURLWithPath: line)
+                        if FileManager.default.fileExists(atPath: fileURL.path) {
+                            if !self.state.tracks.contains(where: { $0.fileURL?.path == fileURL.path }) {
+                                self.processAndImportFile(at: fileURL)
+                            }
+                        }
+                    }
+                    DispatchQueue.main.async {
+                        self.state.saveContext()
+                    }
+                } else if let error = error {
+                    print("AppleScript sync failed: \\(error)")
+                }
+            }
+        }
     }
     
     private func scanLocalMusicDirectory() {
@@ -370,6 +563,7 @@ struct SidebarView: View {
                     self.state.upsertTrack(track)
                 }
                 
+                self.state.saveContext()
                 print("Successfully processed \(importedTracks.count) songs from selected folder!")
             }
         }
@@ -394,6 +588,7 @@ struct SidebarView: View {
 struct LyricsSidebarView: View {
     @ObservedObject var state: AppStateManager
     @ObservedObject var engine: AudioEngineManager
+    @ObservedObject var timeTracker: AudioTimeTracker
     
     var body: some View {
         VStack(spacing: 0) {
@@ -444,7 +639,7 @@ struct LyricsSidebarView: View {
                                 Group {
                                     if line.isBreak {
                                         InstrumentalBreakDots(
-                                            currentTime: engine.currentTime,
+                                            currentTime: timeTracker.currentTime,
                                             breakStart: line.breakStart,
                                             breakEnd: line.breakEnd
                                         )
@@ -467,7 +662,7 @@ struct LyricsSidebarView: View {
                         }
                         .padding(.vertical, 120)
                         .padding(.horizontal, 16)
-                        .onChange(of: engine.currentTime) { newValue in
+                        .onChange(of: timeTracker.currentTime) { newValue in
                             if let currentActive = engine.parsedLyrics.last(where: { $0.timestamp <= newValue }) {
                                 withAnimation {
                                     proxy.scrollTo(currentActive.id, anchor: .center)
@@ -484,9 +679,9 @@ struct LyricsSidebarView: View {
     
     private func isLineActive(_ line: SyncedLyricLine) -> Bool {
         if line.isBreak {
-            return engine.currentTime >= line.breakStart && engine.currentTime <= line.breakEnd
+            return timeTracker.currentTime >= line.breakStart && timeTracker.currentTime <= line.breakEnd
         }
-        return engine.currentTime >= line.timestamp && engine.currentTime < line.endTime
+        return timeTracker.currentTime >= line.timestamp && timeTracker.currentTime < line.endTime
     }
 }
 
@@ -495,6 +690,7 @@ struct LyricsSidebarView: View {
 struct QueueSidebarView: View {
     @ObservedObject var state: AppStateManager
     @ObservedObject var engine: AudioEngineManager
+    @ObservedObject var timeTracker: AudioTimeTracker
     var isFullscreen: Bool = false
     
     var upcomingTracks: [LocalTrack] {
@@ -616,7 +812,7 @@ struct QueueSidebarView: View {
                                         AsyncThumbnailView(track: track, size: 32, theme: state.theme)
                                         
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(track.title)
+                                            Text(track.title) // Revert cleanTitle
                                                 .font(.system(size: 10.5, weight: .bold))
                                                 .foregroundColor(state.theme.textPrimary)
                                                 .lineLimit(1)
@@ -637,6 +833,22 @@ struct QueueSidebarView: View {
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(QueueRowButtonStyle(theme: state.theme))
+                                .contextMenu {
+                                    Button("Play Next") {
+                                        engine.playTrack(track)
+                                    }
+                                    Button("Remove from Queue") {
+                                        if let idx = state.activeQueue.firstIndex(where: { $0.id == track.id }) {
+                                            state.activeQueue.remove(at: idx)
+                                        }
+                                    }
+                                    Button("Add to Favorites") {
+                                        if let idx = state.tracks.firstIndex(where: { $0.id == track.id }) {
+                                            state.tracks[idx].isFavorite = true
+                                            state.saveContext()
+                                        }
+                                    }
+                                }
                             }
                             
                             if upcomingTracks.count > 100 {
@@ -680,6 +892,7 @@ struct SwiftOutputDevice: Identifiable, Hashable {
 struct OutputDeviceSidebarView: View {
     @ObservedObject var state: AppStateManager
     @ObservedObject var engine: AudioEngineManager
+    @ObservedObject var timeTracker: AudioTimeTracker
     var isFullscreen: Bool = false
     
     @State private var connectingDeviceId: String? = nil
@@ -923,59 +1136,3 @@ struct OutputDeviceSidebarView: View {
     }
 }
 
-struct AsyncThumbnailView: View {
-    let track: LocalTrack
-    let size: CGFloat
-    let theme: ThemeColor
-    
-    @State private var thumbnail: NSImage?
-    
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(theme.cardBackground)
-                .frame(width: size, height: size)
-            
-            if let thumbnail = thumbnail {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size, height: size)
-                    .cornerRadius(4)
-            } else {
-                Image(systemName: track.coverImageName)
-                    .font(.system(size: size * 0.4))
-                    .foregroundColor(theme.accent)
-            }
-        }
-        .onAppear {
-            generateThumbnail()
-        }
-    }
-    
-    private func generateThumbnail() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            var sourceImage: NSImage?
-            if let artData = track.embeddedArtData {
-                sourceImage = NSImage(data: artData)
-            } else if let imageURL = track.localCoverURL {
-                sourceImage = NSImage(contentsOf: imageURL)
-            }
-            
-            if let img = sourceImage {
-                let targetSize = NSSize(width: size * 2, height: size * 2)
-                let newImage = NSImage(size: targetSize)
-                newImage.lockFocus()
-                img.draw(in: NSRect(origin: .zero, size: targetSize),
-                         from: NSRect(origin: .zero, size: img.size),
-                         operation: .copy,
-                         fraction: 1.0)
-                newImage.unlockFocus()
-                
-                DispatchQueue.main.async {
-                    self.thumbnail = newImage
-                }
-            }
-        }
-    }
-}
