@@ -292,15 +292,16 @@ struct FullLyricsView: View {
                                         .frame(width: 380, height: 380)
                                 }
                             }
-                            .buttonStyle(PlainButtonStyle())
-                            .scaleEffect(engine.isPlaying ? (isHoveringArt ? 1.02 : 1.0) : 0.85)
-                            .shadow(color: cachedColors.first?.opacity(engine.isPlaying ? 0.6 : 0.2) ?? Color.black.opacity(engine.isPlaying ? 0.5 : 0.2), radius: engine.isPlaying ? 40 : 15, x: 0, y: engine.isPlaying ? 20 : 5)
-                            .animation(.spring(response: 0.5, dampingFraction: 0.75, blendDuration: 0), value: engine.isPlaying)
-                            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHoveringArt)
-                            .onHover { isHoveringArt = $0 }
-                            
-                            // Text descriptions and action row matching the reference layout
-                            HStack(alignment: .center) {
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .scaleEffect(engine.isPlaying ? (isHoveringArt ? 1.02 : 1.0) : 0.85)
+                        .shadow(color: cachedColors.first?.opacity(engine.isPlaying ? 0.6 : 0.2) ?? Color.black.opacity(engine.isPlaying ? 0.5 : 0.2), radius: engine.isPlaying ? 40 : 15, x: 0, y: engine.isPlaying ? 20 : 5)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.75, blendDuration: 0), value: engine.isPlaying)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHoveringArt)
+                        .onHover { isHoveringArt = $0 }
+                        
+                        // Text descriptions and action row matching the reference layout
+                        HStack(alignment: .center) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(engine.currentTrack?.title ?? "Not Playing")
                                         .font(.system(size: 24, weight: .black, design: .rounded))
@@ -548,7 +549,7 @@ struct FullLyricsView: View {
                                             }
                                         }
                                         .frame(width: 540)
-                                        .onChange(of: timeTracker.currentTime) { newValue in
+                                        .onChange(of: timeTracker.currentTime) { _, newValue in
                                             if let currentActive = engine.parsedLyrics.last(where: { $0.timestamp <= newValue }) {
                                                 if activeLineId != currentActive.id { activeLineId = currentActive.id; withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
                                                     proxy.scrollTo(currentActive.id, anchor: .center) }
@@ -563,7 +564,7 @@ struct FullLyricsView: View {
                                         .shadow(radius: 10)
                                         .padding(.vertical, 20)
                                 case .output:
-                                    OutputDeviceSidebarView(state: state, engine: engine, isFullscreen: true)
+                                    OutputDeviceSidebarView(state: state, engine: engine, timeTracker: engine.timeTracker, isFullscreen: true)
                                         .frame(width: 440)
                                         .cornerRadius(16)
                                         .shadow(radius: 10)
@@ -664,10 +665,11 @@ struct FullLyricsView: View {
                     .padding(.bottom, 12)
                     .background(Color.black.opacity(0.5))
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
                     updateCachedColors()
                 }
-                .onChange(of: engine.currentTrack) { newValue in
+                .onChange(of: engine.currentTrack) { _, newValue in
                     updateCachedColors()
                 }
                 .alert("New Playlist", isPresented: $showNewPlaylistAlert, actions: {
@@ -684,23 +686,23 @@ struct FullLyricsView: View {
             }
             .ignoresSafeArea(.all)
         }
-        
-        private func isLineActive(_ line: SyncedLyricLine) -> Bool {
-            if line.isBreak {
-                return timeTracker.currentTime >= line.breakStart && timeTracker.currentTime <= line.breakEnd
-            }
-            return timeTracker.currentTime >= line.timestamp && timeTracker.currentTime < line.endTime
+    
+    private func isLineActive(_ line: SyncedLyricLine) -> Bool {
+        if line.isBreak {
+            return timeTracker.currentTime >= line.breakStart && timeTracker.currentTime <= line.breakEnd
         }
-        
-        private func formatTime(_ sec: TimeInterval) -> String {
-            let m = Int(sec) / 60
-            let s = Int(sec) % 60
-            return String(format: "%d:%02d", m, s)
-        }
+        return timeTracker.currentTime >= line.timestamp && timeTracker.currentTime < line.endTime
     }
     
-    // MARK: - High-performance Equatable Cached Lyric Row Component
-    struct LyricLineView: View, Equatable {
+    private func formatTime(_ sec: TimeInterval) -> String {
+        let m = Int(sec) / 60
+        let s = Int(sec) % 60
+        return String(format: "%d:%02d", m, s)
+    }
+}
+
+// MARK: - High-performance Equatable Cached Lyric Row Component
+struct LyricLineView: View, Equatable {
         let line: SyncedLyricLine
         let isActive: Bool
         let currentTime: TimeInterval
@@ -786,5 +788,4 @@ struct FullLyricsView: View {
             .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isActive)
         }
     }
-}
 
