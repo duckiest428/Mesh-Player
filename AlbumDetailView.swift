@@ -17,10 +17,18 @@ struct AlbumDetailView: View {
     @State private var showNewPlaylistAlert = false
     @State private var newPlaylistName = ""
     @State private var trackToAdd: LocalTrack?
+    @State private var showingAudioQualityPopover = false
+    @State private var popupTitle: String = ""
+    @State private var popupDescription: String = ""
     
     // Find all tracks in this album
     var albumTracks: [LocalTrack] {
-        state.tracks.filter { $0.album == albumName }
+        state.tracks.filter { $0.album == albumName }.sorted {
+            if $0.discNumber != $1.discNumber {
+                return $0.discNumber < $1.discNumber
+            }
+            return $0.parsedTrackNumber < $1.parsedTrackNumber
+        }
     }
     
     // Representative track
@@ -61,17 +69,16 @@ struct AlbumDetailView: View {
     var totalDurationText: String {
         let totalSecs = albumTracks.reduce(0.0) { $0 + $1.duration }
         let mins = Int(totalSecs) / 60
-        if albumTracks.count == 1 {
-            return "1 Song, \(mins) Minutes"
-        } else {
-            return "\(albumTracks.count) Songs, \(mins) Minutes"
-        }
+        return "\(mins) Minute\(mins == 1 ? "" : "s")"
     }
     
     var copyrightText: String {
-        let year = "2026"
-        let artist = representative?.artist ?? "Music Corp"
-        return "℗ \(year) \(artist) Records LLC"
+        if let firstExplicit = albumTracks.first(where: { $0.copyright != nil && !$0.copyright!.isEmpty })?.copyright {
+            return firstExplicit
+        }
+        let yearStr = representative?.year != nil ? String(representative!.year!) : String(Calendar.current.component(.year, from: Date()))
+        let artist = representative?.artist ?? "Unknown Artist"
+        return "℗ \(yearStr) \(artist)"
     }
     
 
@@ -79,7 +86,7 @@ struct AlbumDetailView: View {
         ScrollView {
             HStack(alignment: .top, spacing: 32) {
                 
-                // LEFT SIDEBAR: Album Artwork, Format tags, Editor Notes
+                // LEFT SIDEBAR: Album Artwork, Editor Notes
                 VStack(alignment: .leading, spacing: 20) {
                     // 1. Artwork
                     ZStack {
@@ -87,75 +94,20 @@ struct AlbumDetailView: View {
                             .fill(state.theme.cardBackground)
                             .frame(width: 190, height: 190)
                             .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
-                        
-                        if let rep = representative {
-                            if let artData = rep.embeddedArtData, let nsImage = NSImage(data: artData) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 190, height: 190)
-                                    .cornerRadius(12)
-                            } else if let imageURL = rep.localCoverURL, let nsImage = NSImage(contentsOf: imageURL) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 190, height: 190)
-                                    .cornerRadius(12)
-                            } else {
-                                Image(systemName: rep.coverImageName)
-                                    .font(.system(size: 60))
-                                    .foregroundColor(state.theme.accent)
-                            }
-                            
+                                               if let rep = representative {
+                            AsyncFlexibleThumbnailView(track: rep, maxPixelSize: 380, theme: state.theme, cornerRadius: 12)
+                                .frame(width: 190, height: 190)
+                                
                             AnimatedArtworkView(track: rep, cornerRadius: 12)
                                 .frame(width: 190, height: 190)
                                 .allowsHitTesting(false)
+                        } else {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(state.theme.cardBackground)
+                                .frame(width: 190, height: 190)
                         }
                     }
                     .frame(width: 190, height: 190)
-                    
-                    // 2. Audio Quality Tags
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("TAGS")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundColor(state.theme.textSecondary.opacity(0.7))
-                            .tracking(1.2)
-                        
-                        FlowLayout(spacing: 6) {
-                            // Genre Tag
-                            Text(representative?.genre ?? "Unknown")
-                                .font(.system(size: 9.5, weight: .bold))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(state.theme.cardBackground)
-                                .foregroundColor(state.theme.textPrimary)
-                                .cornerRadius(4)
-                            
-                            if hasAtmos {
-                                DolbyAtmosBadge(color: .blue, scale: 0.85, showText: true)
-                            }
-                            
-                            if hasLossless {
-                                Text("Lossless")
-                                    .font(.system(size: 9.5, weight: .bold))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(Color.green.opacity(0.12))
-                                    .foregroundColor(.green)
-                                    .cornerRadius(4)
-                            }
-                            
-                            if let kps = kbpsTag {
-                                Text(kps.uppercased())
-                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(state.theme.cardBackground)
-                                    .foregroundColor(state.theme.textSecondary)
-                                    .cornerRadius(4)
-                            }
-                        }
-                    }
                 }
                 .frame(width: 190)
                 
@@ -164,7 +116,7 @@ struct AlbumDetailView: View {
                     
                     // Header group
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(albumName)
+                        Text(albumName.hasSuffix(" - Single") ? String(albumName.dropLast(9)) : (albumName.hasSuffix("- Single") ? String(albumName.dropLast(8)) : albumName))
                             .font(.system(size: 28, weight: .black, design: .rounded))
                             .foregroundColor(state.theme.textPrimary)
                         
@@ -181,9 +133,52 @@ struct AlbumDetailView: View {
                         }
                         .buttonStyle(.plain)
                         
-                        Text("Album • \(representative?.genre ?? "Alternative") • \(totalDurationText)")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(state.theme.textSecondary)
+                        HStack(spacing: 4) {
+                            Text(albumName.contains("- Single") ? "Single" : "Album")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(state.theme.textSecondary)
+                            
+                            Text("•")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(state.theme.textSecondary)
+                            
+                            Button(action: {
+                                if let g = representative?.genre {
+                                    state.selectedTab = "songs"
+                                    state.searchKeyword = g
+                                }
+                            }) {
+                                Text(representative?.genre ?? "Alternative")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(state.theme.textSecondary)
+                            }
+                            .buttonStyle(.plain)
+                            .onHover { isHovered in
+                                if isHovered { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                            }
+                            
+                            Text("• \(albumTracks.count) Song\(albumTracks.count == 1 ? "" : "s")")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(state.theme.textSecondary)
+                            
+                            Text("• \(totalDurationText)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(state.theme.textSecondary)
+                                
+                            if let yearRecorded = representative?.year {
+                                Text("• \(yearRecorded)")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(state.theme.textSecondary)
+                            }
+                                
+                            if let representative = representative {
+                                Text("•")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(state.theme.textSecondary)
+                                
+                                AudioQualityTagsView(track: representative, theme: state.theme)
+                            }
+                        }
                     }
                     
                     // Action Pills
@@ -243,12 +238,30 @@ struct AlbumDetailView: View {
                         Divider()
                             .background(state.theme.textSecondary.opacity(0.12))
                         
+                        let isMultiDisc = (albumTracks.map { $0.discNumber }.max() ?? 1) > 1
+                        
                         ForEach(Array(albumTracks.enumerated()), id: \.offset) { index, track in
                             let isPlaying = engine.currentTrack?.id == track.id
+                            let showDiscHeader = isMultiDisc && (index == 0 || albumTracks[index - 1].discNumber != track.discNumber)
+                            
+                            if showDiscHeader {
+                                HStack {
+                                    Text("Disc \(track.discNumber)")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundColor(state.theme.textSecondary)
+                                    Spacer()
+                                }
+                                .padding(.top, 16)
+                                .padding(.bottom, 8)
+                                .padding(.horizontal, 8)
+                                
+                                Divider()
+                                    .background(state.theme.textSecondary.opacity(0.12))
+                            }
                             
                             HStack(spacing: 14) {
                                 // Index
-                                Text("\(index + 1)")
+                                Text("\(track.parsedTrackNumber > 0 ? track.parsedTrackNumber : index + 1)")
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                                     .foregroundColor(isPlaying ? state.theme.accent : state.theme.textSecondary.opacity(0.4))
                                     .frame(width: 18, alignment: .trailing)
