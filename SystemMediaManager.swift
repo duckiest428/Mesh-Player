@@ -1,13 +1,5 @@
 //
 //  SystemMediaManager.swift
-//  Mesh Player
-//
-//  Created by Peter Luedtke on 2026-06-26.
-//
-
-
-//
-//  SystemMediaManager.swift
 //  macOS Music Player
 //
 //  Created for Xcode Native Compile on 2026-06-26.
