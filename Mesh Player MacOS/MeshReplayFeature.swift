@@ -236,10 +236,6 @@ final class MeshReplayViewModel: ObservableObject {
         let calendar = Calendar.current
         let year = calendar.component(.year, from: interval.start)
         
-        if state.playHistoryLog.isEmpty && state.tracks.contains(where: { $0.playCount > 0 }) {
-            state.seedPlayHistoryLogIfNeeded()
-        }
-        
         let entries = state.playHistoryLog.filter { entry in
             entry.timestamp >= interval.start && entry.timestamp <= interval.end
         }

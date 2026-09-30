@@ -23,6 +23,11 @@
 			path = "Mesh Player iOS";
 			sourceTree = "<group>";
 		};
+		A8F00000300000000000A001 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,6 +50,7 @@
 				A81BE8522FF89B2600467EF6 /* Mesh-Player-Info */,
 				000000000000000000000010 /* Mesh Player MacOS */,
 				A80551B33004183A00932366 /* Mesh Player iOS */,
+				A8F00000300000000000A001 /* Shared */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -73,6 +79,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* Mesh Player MacOS */,
+				A8F00000300000000000A001 /* Shared */,
 			);
 			name = "Mesh Player";
 			productName = MyApp;
@@ -91,6 +98,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A80551B33004183A00932366 /* Mesh Player iOS */,
+				A8F00000300000000000A001 /* Shared */,
 			);
 			name = "Mesh Player iOS";
 			productName = "Mesh Player iOS";
@@ -299,13 +307,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_ENTITLEMENTS = "Mesh Player.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = HK8MSU972Q;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_MUSIC_FOLDER = readwrite;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -319,11 +328,12 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Mesh Player macOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Mesh Player";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Mesh Player requires access to your Apple Music library to import your playlists and favorite tracks.";
 				INFOPLIST_KEY_NSBluetoothWhileInUseUsageDescription = "Mesh App needs bluetooth to detect output devices found in Control Center>Sound. Unlike Apple Music, it is out of our capabilities to fetch this naitively.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A connection is needed to sync your songs.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mesh Player finds your iPhone on the local network to sync your music.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -359,13 +369,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_ENTITLEMENTS = "Mesh Player.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = HK8MSU972Q;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_MUSIC_FOLDER = readwrite;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -379,11 +390,12 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Mesh Player macOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Mesh Player";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Mesh Player requires access to your Apple Music library to import your playlists and favorite tracks.";
 				INFOPLIST_KEY_NSBluetoothWhileInUseUsageDescription = "Mesh App needs bluetooth to detect output devices found in Control Center>Sound. Unlike Apple Music, it is out of our capabilities to fetch this naitively.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A connection is needed to sync your songs.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mesh Player finds your iPhone on the local network to sync your music.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -425,7 +437,10 @@
 				DEVELOPMENT_TEAM = HK8MSU972Q;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A connection is needed to sync your songs.";
+				INFOPLIST_FILE = "Mesh Player iOS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Mesh Player";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mesh Player finds your Mac on the local network to sync your music.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -460,7 +475,10 @@
 				DEVELOPMENT_TEAM = HK8MSU972Q;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A connection is needed to sync your songs.";
+				INFOPLIST_FILE = "Mesh Player iOS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Mesh Player";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mesh Player finds your Mac on the local network to sync your music.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

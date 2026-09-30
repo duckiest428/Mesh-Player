@@ -1,5 +1,3 @@
-import AppKit
-import CoreGraphics
 //
 //  AppState.swift
 //  macOS Music Player
@@ -8,20 +6,14 @@ import CoreGraphics
 //  SPDX-License-Identifier: Apache-2.0
 //
 
-import SwiftUI
+import AppKit
+import AVFoundation
 import Combine
-import iTunesLibrary
-
-// MARK: - Native Apple Music Integration Setup Instructions
-// To enable this feature in Xcode:
-// 1. Open your project target settings.
-// 2. Go to the Info tab (or edit Info.plist directly).
-// 3. Add the key "Privacy - Media Library Usage Description" (NSAppleMusicUsageDescription).
-// 4. Set the value to a description, e.g., "Mesh Player requires access to your Apple Music library to import your playlists and favorite tracks."
+import SwiftUI
 
 // MARK: - Models
 
-struct LocalTrack: Identifiable, Hashable, Codable {
+nonisolated struct LocalTrack: Identifiable, Hashable, Codable {
     var id: UUID = UUID()
     var title: String
     var artist: String
@@ -31,7 +23,9 @@ struct LocalTrack: Identifiable, Hashable, Codable {
     var fileURL: URL?
     var coverImageName: String // SF Symbol name or asset image
     var localCoverURL: URL? = nil // Local artwork image file URL (e.g. cover.jpg)
-    var embeddedArtData: Data? = nil // Raw album artwork extracted directly from audio files
+    /// Legacy inline artwork. Artwork now lives in `ArtworkStore` on disk; this is only
+    /// read once to migrate old databases and is always nil afterwards.
+    var embeddedArtData: Data? = nil
     var dateAdded: Date
     var isAtmos: Bool
     var fileSize: String
@@ -50,48 +44,52 @@ struct LocalTrack: Identifiable, Hashable, Codable {
     var sampleRate: Double? = nil
     var channels: Int? = nil
     var bitDepth: Int? = nil
-    
+    var albumArtist: String? = nil
+    /// Apple Music persistent ID when the track came from the Music app library.
+    var persistentID: String? = nil
+
     var yearRecorded: Int? {
         get { year }
         set { year = newValue }
     }
-    
+
+    var sortYear: Int { year ?? 0 }
+    var favoriteRank: Int { isFavorite ? 1 : 0 }
+
     var parsedTrackNumber: Int {
         if trackNumber > 0 { return trackNumber }
-        
-        let pattern = "^\\s*0*(\\d+)"
-        
-        let filename = fileURL!.deletingPathExtension().lastPathComponent
-        if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-           let match = regex.firstMatch(in: filename, options: [], range: NSRange(location: 0, length: filename.utf16.count)) {
-            let numStr = (filename as NSString).substring(with: match.range(at: 1))
-            if let num = Int(numStr) {
-                return num
-            }
+        if let fileURL, let num = Self.leadingNumber(in: fileURL.deletingPathExtension().lastPathComponent) {
+            return num
         }
-        
-        if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-           let match = regex.firstMatch(in: title, options: [], range: NSRange(location: 0, length: title.utf16.count)) {
-            let numStr = (title as NSString).substring(with: match.range(at: 1))
-            if let num = Int(numStr) {
-                return num
-            }
-        }
-        
-        return 9999
+        return Self.leadingNumber(in: title) ?? 9999
     }
-    
+
     var cleanTitle: String {
-        let pattern = "^\\s*\\d+[-_.]?\\s*"
-        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
-            return regex.stringByReplacingMatches(in: title, options: [], range: NSRange(location: 0, length: title.utf16.count), withTemplate: "")
+        guard let first = title.first, first.isNumber || first == " " else { return title }
+        let trimmed = title.drop(while: { $0 == " " }).drop(while: { $0.isNumber })
+        let rest = trimmed.drop(while: { $0 == "-" || $0 == "_" || $0 == "." }).drop(while: { $0 == " " })
+        return rest.isEmpty ? title : String(rest)
+    }
+
+    /// Stable key shared by every track of the same album so artwork is extracted once per album.
+    var artworkKey: String {
+        let albumName = album.trimmingCharacters(in: .whitespaces)
+        if albumName.isEmpty || albumName == "Unknown Album" || albumName == "Single" {
+            return "track-" + id.uuidString
         }
-        return title
+        let owner = (albumArtist?.isEmpty == false ? albumArtist! : artist).lowercased()
+        return "album-" + ArtworkStore.stableHash("\(owner)|\(albumName.lowercased())")
+    }
+
+    private static func leadingNumber(in text: String) -> Int? {
+        let digits = text.drop(while: { $0 == " " }).prefix(while: { $0.isNumber })
+        guard !digits.isEmpty, digits.count <= 4 else { return nil }
+        return Int(digits)
     }
 }
 
 // MARK: - Continuous Immutable Play History Logging
-struct PlayLogEntry: Identifiable, Codable, Hashable {
+nonisolated struct PlayLogEntry: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var trackId: UUID
     var title: String
@@ -102,20 +100,153 @@ struct PlayLogEntry: Identifiable, Codable, Hashable {
     var timestamp: Date
 }
 
-struct PlaylistTrack: Identifiable, Hashable, Codable {
+nonisolated struct PlaylistTrack: Identifiable, Hashable, Codable {
     var id: UUID = UUID()
     var track: LocalTrack
 }
 
-struct Playlist: Identifiable, Hashable, Codable {
+nonisolated struct Playlist: Identifiable, Hashable, Codable {
     var id: UUID = UUID()
     var name: String
     var description: String
     var isImported: Bool
     var playlistTracks: [PlaylistTrack]
-    
+    /// When true, songs in this playlist are hidden from Songs, Albums, Artists, Genres and Home.
+    var excludeFromLibrary: Bool? = nil
+    /// Custom cover image file name inside the playlist artwork folder.
+    var artworkFileName: String? = nil
+    /// Non-nil for smart playlists: the rules that pick their songs.
+    var smartRules: SmartPlaylistRules? = nil
+    var dateCreated: Date? = nil
+    var dateModified: Date? = nil
+    /// Apple Music persistent ID of the playlist this one was imported from or exported to.
+    var appleMusicID: String? = nil
+
     var tracks: [LocalTrack] {
         return playlistTracks.map { $0.track }
+    }
+
+    var isSmart: Bool { smartRules != nil }
+    var hidesSongsFromLibrary: Bool { excludeFromLibrary ?? false }
+    var isAppleMusicFavorites: Bool { isImported && name.contains("Favorites") && !isSmart }
+}
+
+// MARK: - Smart playlists
+
+nonisolated struct SmartRule: Identifiable, Hashable, Codable {
+    enum Field: String, Codable, CaseIterable, Identifiable {
+        case title = "Title", artist = "Artist", album = "Album", genre = "Genre", year = "Year"
+        case plays = "Plays", dateAdded = "Date Added", lastPlayed = "Last Played"
+        case favorite = "Favorite", quality = "Quality", duration = "Time (minutes)"
+        var id: String { rawValue }
+
+        var kind: Kind {
+            switch self {
+            case .title, .artist, .album, .genre, .quality: return .text
+            case .year, .plays, .duration: return .number
+            case .dateAdded, .lastPlayed: return .date
+            case .favorite: return .bool
+            }
+        }
+        enum Kind { case text, number, date, bool }
+    }
+
+    enum Op: String, Codable, CaseIterable, Identifiable {
+        case contains = "contains", notContains = "does not contain", equals = "is", notEquals = "is not", startsWith = "begins with"
+        case greater = "is greater than", less = "is less than"
+        case inLast = "is in the last", notInLast = "is not in the last"
+        case isTrue = "is true", isFalse = "is false"
+        var id: String { rawValue }
+
+        static func options(for kind: Field.Kind) -> [Op] {
+            switch kind {
+            case .text: return [.contains, .notContains, .equals, .notEquals, .startsWith]
+            case .number: return [.equals, .notEquals, .greater, .less]
+            case .date: return [.inLast, .notInLast]
+            case .bool: return [.isTrue, .isFalse]
+            }
+        }
+    }
+
+    var id: UUID = UUID()
+    var field: Field = .genre
+    var op: Op = .contains
+    var text: String = ""
+    var number: Double = 0
+
+    func matches(_ t: LocalTrack, now: Date) -> Bool {
+        switch field.kind {
+        case .text:
+            let value: String
+            switch field {
+            case .title: value = t.title
+            case .artist: value = t.artist
+            case .album: value = t.album
+            case .genre: value = t.genre
+            default: value = t.isAtmos ? "Dolby Atmos" : t.format
+            }
+            let needle = text.trimmingCharacters(in: .whitespaces)
+            switch op {
+            case .contains: return needle.isEmpty || value.localizedCaseInsensitiveContains(needle)
+            case .notContains: return needle.isEmpty || !value.localizedCaseInsensitiveContains(needle)
+            case .equals: return value.localizedCaseInsensitiveCompare(needle) == .orderedSame
+            case .notEquals: return value.localizedCaseInsensitiveCompare(needle) != .orderedSame
+            default: return value.lowercased().hasPrefix(needle.lowercased())
+            }
+        case .number:
+            let value: Double
+            switch field {
+            case .year: value = Double(t.year ?? 0)
+            case .plays: value = Double(t.playCount)
+            default: value = t.duration / 60
+            }
+            switch op {
+            case .equals: return value == number
+            case .notEquals: return value != number
+            case .greater: return value > number
+            default: return value < number
+            }
+        case .date:
+            let date = field == .dateAdded ? t.dateAdded : t.lastPlayedDate
+            let cutoff = now.addingTimeInterval(-number * 86_400)
+            guard let date else { return op == .notInLast }
+            return op == .inLast ? date >= cutoff : date < cutoff
+        case .bool:
+            return op == .isTrue ? t.isFavorite : !t.isFavorite
+        }
+    }
+}
+
+nonisolated struct SmartPlaylistRules: Hashable, Codable {
+    enum LimitOrder: String, Codable, CaseIterable, Identifiable {
+        case random = "Random", mostPlayed = "Most Played", leastPlayed = "Least Played"
+        case recentlyAdded = "Most Recently Added", recentlyPlayed = "Most Recently Played", title = "Title"
+        var id: String { rawValue }
+    }
+    var matchAll = true
+    var rules: [SmartRule] = [SmartRule()]
+    var limit: Int? = nil
+    var limitOrder: LimitOrder = .random
+
+    func evaluate(_ library: [LocalTrack], seed: UUID) -> [LocalTrack] {
+        let now = Date()
+        var matched = library.filter { t in
+            guard !rules.isEmpty else { return true }
+            return matchAll ? rules.allSatisfy { $0.matches(t, now: now) } : rules.contains { $0.matches(t, now: now) }
+        }
+        guard let limit, limit > 0, matched.count > limit else { return matched }
+        switch limitOrder {
+        case .random:
+            // Stable per playlist so the selection doesn't change on every redraw.
+            let salt = seed.uuidString
+            matched.sort { ArtworkStore.stableHash(salt + $0.id.uuidString) < ArtworkStore.stableHash(salt + $1.id.uuidString) }
+        case .mostPlayed: matched.sort { $0.playCount > $1.playCount }
+        case .leastPlayed: matched.sort { $0.playCount < $1.playCount }
+        case .recentlyAdded: matched.sort { $0.dateAdded > $1.dateAdded }
+        case .recentlyPlayed: matched.sort { ($0.lastPlayedDate ?? .distantPast) > ($1.lastPlayedDate ?? .distantPast) }
+        case .title: matched.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
+        return Array(matched.prefix(limit))
     }
 }
 
@@ -147,24 +278,19 @@ struct LocalGenre: Identifiable, Hashable {
     let trackRepresentative: LocalTrack
 }
 
-struct SyncedLyricLine: Identifiable, Equatable, Hashable {
-    let id: UUID
-    let timestamp: TimeInterval
-    let text: String
-    var isBreak: Bool
-    var breakStart: TimeInterval
-    var breakEnd: TimeInterval
-    var endTime: TimeInterval
-    
-    init(id: UUID = UUID(), timestamp: TimeInterval, text: String, isBreak: Bool = false, breakStart: TimeInterval = 0.0, breakEnd: TimeInterval = 0.0, endTime: TimeInterval = 0.0) {
-        self.id = id
-        self.timestamp = timestamp
-        self.text = text
-        self.isBreak = isBreak
-        self.breakStart = breakStart
-        self.breakEnd = breakEnd
-        self.endTime = endTime
-    }
+struct LibraryStats: Equatable {
+    var songs = 0
+    var artists = 0
+    var albums = 0
+    var genres = 0
+    var plays = 0
+    var listeningSeconds: TimeInterval = 0
+}
+
+nonisolated struct DatabaseDump: Codable {
+    var tracks: [LocalTrack]
+    var playlists: [Playlist]
+    var playHistoryLog: [PlayLogEntry]?
 }
 
 // MARK: - Themes Structure
@@ -179,118 +305,7 @@ struct ThemeColor {
     let isDark: Bool
 }
 
-// MARK: - App State Context
-
-import SwiftUI
-import AppKit
-import AVFoundation
-
-struct AnimatedArtworkView: NSViewRepresentable {
-    let track: LocalTrack
-    let cornerRadius: CGFloat
-    
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.cornerRadius = cornerRadius
-        view.layer?.masksToBounds = true
-        
-        let playerLayer = AVPlayerLayer()
-        playerLayer.videoGravity = .resizeAspectFill
-        playerLayer.cornerRadius = cornerRadius
-        playerLayer.masksToBounds = true
-        view.layer?.addSublayer(playerLayer)
-        
-        context.coordinator.playerLayer = playerLayer
-        updatePlayer(for: track, in: context)
-        
-        return view
-    }
-    
-    func updateNSView(_ nsView: NSView, context: Context) {
-        if context.coordinator.currentTrackId != track.id {
-            updatePlayer(for: track, in: context)
-        }
-        context.coordinator.playerLayer?.frame = nsView.bounds
-    }
-    
-    private func updatePlayer(for track: LocalTrack, in context: Context) {
-        context.coordinator.currentTrackId = track.id
-        context.coordinator.player?.pause()
-        context.coordinator.player = nil
-        context.coordinator.playerLayer?.player = nil
-        
-        DispatchQueue.global(qos: .userInitiated).async {
-            if let videoURL = self.findVideoURL(for: track) {
-                DispatchQueue.main.async {
-                    if context.coordinator.currentTrackId == track.id {
-                        let player = AVPlayer(url: videoURL)
-                        player.isMuted = true
-                        context.coordinator.player = player
-                        context.coordinator.playerLayer?.player = player
-                        player.play()
-                        
-                        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { _ in
-                            player.seek(to: .zero)
-                            player.play()
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    private func findVideoURL(for track: LocalTrack) -> URL? {
-        let extensions = ["mp4", "mov", "m4v"]
-        
-        if let fileURL = track.fileURL {
-            let baseUrl = fileURL.deletingPathExtension()
-            for ext in extensions {
-                let videoURL = baseUrl.appendingPathExtension(ext)
-                if FileManager.default.fileExists(atPath: videoURL.path) {
-                    return videoURL
-                }
-            }
-        }
-        
-        if let coverURL = track.localCoverURL {
-            let baseUrl = coverURL.deletingPathExtension()
-            for ext in extensions {
-                let videoURL = baseUrl.appendingPathExtension(ext)
-                if FileManager.default.fileExists(atPath: videoURL.path) {
-                    return videoURL
-                }
-            }
-            
-            let dirUrl = coverURL.deletingLastPathComponent()
-            for ext in extensions {
-                let videoURL = dirUrl.appendingPathComponent("artwork").appendingPathExtension(ext)
-                if FileManager.default.fileExists(atPath: videoURL.path) {
-                    return videoURL
-                }
-            }
-        }
-        
-        if let fileURL = track.fileURL {
-            let asset = AVAsset(url: fileURL)
-            if asset.tracks(withMediaType: .video).count > 0 {
-                return fileURL
-            }
-        }
-        
-        return nil
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-    
-    class Coordinator {
-        var player: AVPlayer?
-        var playerLayer: AVPlayerLayer?
-        var currentTrackId: UUID?
-    }
-}
+// MARK: - Library folders
 
 class LibraryManager {
     static let shared = LibraryManager()
@@ -298,86 +313,35 @@ class LibraryManager {
     let libraryDirectory: URL
     let autoAddDirectory: URL
     let mediaDirectory: URL
-    let appleMusicFallbackDirectory: URL
 
     private init() {
-        let musicDir = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!
-        libraryDirectory = musicDir.appendingPathComponent("Mesh Player")
+        libraryDirectory = MeshPaths.meshLibraryFolder
         autoAddDirectory = libraryDirectory.appendingPathComponent("Automatically Add to Mesh Player")
         mediaDirectory = libraryDirectory.appendingPathComponent("Media/Music")
-        appleMusicFallbackDirectory = musicDir.appendingPathComponent("Music/Media/Music")
 
-        do {
-            if !FileManager.default.fileExists(atPath: libraryDirectory.path) {
-                try FileManager.default.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
-            }
-            if !FileManager.default.fileExists(atPath: autoAddDirectory.path) {
-                try FileManager.default.createDirectory(at: autoAddDirectory, withIntermediateDirectories: true)
-            }
-            if !FileManager.default.fileExists(atPath: mediaDirectory.path) {
-                try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
-            }
-        } catch {
-            print("Failed to create Mesh Player library directories: \(error)")
-        }
-    }
-
-    func organizeAndCopyFile(at sourceURL: URL, trackMetadata: LocalTrack) async throws -> URL {
-        let accessing = sourceURL.startAccessingSecurityScopedResource()
-        defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
-
-        let sanitizedArtist = sanitize(trackMetadata.artist, fallback: "Unknown Artist")
-        let sanitizedAlbum = sanitize(trackMetadata.album, fallback: "Unknown Album")
-        let sanitizedTitle = sanitize(trackMetadata.title, fallback: "Unknown Track")
-
-        let artistDir = mediaDirectory.appendingPathComponent(sanitizedArtist)
-        let albumDir = artistDir.appendingPathComponent(sanitizedAlbum)
-
-        try FileManager.default.createDirectory(at: albumDir, withIntermediateDirectories: true)
-
-        let ext = sourceURL.pathExtension
-        let filename = "\(sanitizedTitle).\(ext)"
-        let destinationURL = albumDir.appendingPathComponent(filename)
-
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
-        }
-
-        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
-        return destinationURL
-    }
-
-    private func sanitize(_ text: String, fallback: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return fallback }
-        let illegalChars = CharacterSet(charactersIn: "/:\\?*")
-        return trimmed.components(separatedBy: illegalChars).joined(separator: "_")
-    }
-
-    // Simple polling monitor for Automatically Add folder
-    private var monitorTimer: Timer?
-    func startMonitoringAutoAddFolder(onFound: @escaping (URL) -> Void) {
-        monitorTimer?.invalidate()
-        monitorTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
+        for dir in [libraryDirectory, autoAddDirectory, mediaDirectory] {
             do {
-                let files = try FileManager.default.contentsOfDirectory(at: self.autoAddDirectory, includingPropertiesForKeys: nil)
-                let audioExtensions = ["mp3", "m4a", "wav", "flac", "alac", "m4b", "aac", "mp4", "ogg"]
-                for fileURL in files {
-                    if audioExtensions.contains(fileURL.pathExtension.lowercased()) {
-                        onFound(fileURL)
-                    }
-                }
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             } catch {
-                // Ignore errors
+                print("Failed to create Mesh Player library directory \(dir.path): \(error)")
             }
         }
     }
 
-    func deleteFromAutoAdd(url: URL) {
-        try? FileManager.default.removeItem(at: url)
+    // Simple polling monitor for the Automatically Add folder
+    private var monitorTimer: Timer?
+    func startMonitoringAutoAddFolder(onFound: @escaping ([URL]) -> Void) {
+        monitorTimer?.invalidate()
+        let folder = autoAddDirectory
+        monitorTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+            let audio = files.filter { MeshPaths.isAudioFile($0) }
+            if !audio.isEmpty { onFound(audio) }
+        }
     }
 }
+
+// MARK: - App State
 
 class AppStateManager: ObservableObject {
     enum RightSidebarPanel: String, CaseIterable {
@@ -385,20 +349,25 @@ class AppStateManager: ObservableObject {
     }
     @Published var activeRightSidebar: RightSidebarPanel = .none
     @Published var showSyncWindow: Bool = false
+    @Published var showSettingsSheet: Bool = false
+    @Published var showFullscreenPlayer: Bool = false
+    @Published var showImportOptions: Bool = false
     @Published var selectedTab: String? = "home" {
         didSet {
+            guard oldValue != selectedTab else { return }
             activeFilterType = nil
             activeFilterValue = nil
-            searchKeyword = ""
+            if !preserveSearchOnNavigation { searchKeyword = "" }
         }
     }
-    
+    private var preserveSearchOnNavigation = false
+
     @Published var activeQueue: [LocalTrack] = []
     @Published var unshuffleQueue: [LocalTrack] = []
     @Published var isQueueShuffled: Bool = false
     @Published var repeatMode: Int = 0 // 0 = off, 1 = all, 2 = one
-    @Published var removePlaylistSongsFromLibrary: Bool = false
-    
+    @Published var removePlaylistSongsFromLibrary: Bool = false { didSet { persist(removePlaylistSongsFromLibrary, "removePlaylistSongsFromLibrary") } }
+
     // Album Sorting
     enum AlbumSortCriteria: String, CaseIterable {
         case dateAdded = "Date Added"
@@ -406,85 +375,107 @@ class AppStateManager: ObservableObject {
         case title = "Title"
         case artist = "Artist"
     }
-    @Published var albumSortCriteria: AlbumSortCriteria = .dateAdded
-    
-    // Global Idle Tracker
-    @Published var isIdle = false
-    private var interactionTimer: Timer?
+    @Published var albumSortCriteria: AlbumSortCriteria = .dateAdded { didSet { persist(albumSortCriteria.rawValue, "albumSortCriteria") } }
+
+    // Global Idle Tracker. Only publishes when the value actually flips, so mouse movement
+    // and scrolling no longer invalidate every view observing the app state.
+    @Published private(set) var isIdle = false
+    private var lastActivity = Date()
+    private var idleTimer: Timer?
     private var eventMonitor: Any?
-    
+    private var terminationObserver: NSObjectProtocol?
+
     init() {
-        self.loadContext()
-        self.setupIdleMonitor()
+        loadSettings()
+        loadContext()
+        setupIdleMonitor()
+        terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveNow() }
+        }
     }
-    
+
     private func setupIdleMonitor() {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] event in
-            self?.resetIdleTimer()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.lastActivity = Date()
+                if self.isIdle { self.isIdle = false }
+            }
             return event
         }
-        resetIdleTimer()
-    }
-    
-    private func resetIdleTimer() {
-        isIdle = false
-        interactionTimer?.invalidate()
-        interactionTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { [weak self] _ in
-            self?.isIdle = true
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isIdle else { return }
+                if Date().timeIntervalSince(self.lastActivity) > 30 { self.isIdle = true }
+            }
         }
     }
-    
+
     deinit {
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
         }
     }
-    
+
+    /// Navigates to a tab while keeping the current search text.
+    func navigate(to tab: String, keepingSearch: Bool) {
+        preserveSearchOnNavigation = keepingSearch
+        selectedTab = tab
+        preserveSearchOnNavigation = false
+    }
+
+    func showAlbum(_ name: String) {
+        selectedTab = "albums"
+        activeFilterType = "album"
+        activeFilterValue = name
+    }
+
+    func showArtist(_ name: String) {
+        selectedTab = "artists"
+        activeFilterType = "artist"
+        activeFilterValue = name
+    }
+
+    func showGenre(_ name: String) {
+        selectedTab = "genres"
+        activeFilterType = "genre"
+        activeFilterValue = name
+    }
+
     // Manage active queue tracking
     func fetchITunesData(album: String, artist: String, completion: @escaping (String?, String?) -> Void) {
         let cleanAlbum = album.replacingOccurrences(of: "(Explicit)", with: "", options: .caseInsensitive)
                               .replacingOccurrences(of: "(Deluxe)", with: "", options: .caseInsensitive)
                               .trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         let term = "\(cleanAlbum) \(cleanArtist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         guard let url = URL(string: "https://itunes.apple.com/search?term=\(term)&media=music&entity=album&limit=5") else {
             completion(nil, nil)
             return
         }
-        
+
         URLSession.shared.dataTask(with: url) { data, _, _ in
-            guard let data = data else { completion(nil, nil); return }
-            do {
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let results = json["results"] as? [[String: Any]], !results.isEmpty {
-                    
-                    // Match result closest to cleanArtist
-                    let bestMatch = results.first { item in
-                        let itemArtist = (item["artistName"] as? String ?? "").lowercased()
-                        return itemArtist.contains(cleanArtist.lowercased()) || cleanArtist.lowercased().contains(itemArtist)
-                    } ?? results.first
-                    
-                    if let first = bestMatch {
-                        var artwork: String? = nil
-                        if let art100 = first["artworkUrl100"] as? String {
-                            artwork = art100.replacingOccurrences(of: "100x100bb", with: "600x600bb")
-                        }
-                        let copyright = first["copyright"] as? String
-                        
-                        DispatchQueue.main.async {
-                            completion(artwork, copyright)
-                        }
-                        return
+            var artwork: String? = nil
+            var copyright: String? = nil
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let results = json["results"] as? [[String: Any]], !results.isEmpty {
+                let bestMatch = results.first { item in
+                    let itemArtist = (item["artistName"] as? String ?? "").lowercased()
+                    return itemArtist.contains(cleanArtist.lowercased()) || cleanArtist.lowercased().contains(itemArtist)
+                } ?? results.first
+                if let first = bestMatch {
+                    if let art100 = first["artworkUrl100"] as? String {
+                        artwork = art100.replacingOccurrences(of: "100x100bb", with: "600x600bb")
                     }
+                    copyright = first["copyright"] as? String
                 }
-                DispatchQueue.main.async { completion(nil, nil) }
-            } catch {
-                DispatchQueue.main.async { completion(nil, nil) }
             }
+            DispatchQueue.main.async { completion(artwork, copyright) }
         }.resume()
     }
-    
+
     func setQueue(tracks: [LocalTrack], startTrack: LocalTrack) {
         unshuffleQueue = tracks
         if isQueueShuffled {
@@ -495,10 +486,46 @@ class AppStateManager: ObservableObject {
             activeQueue = tracks
         }
     }
-    
+
+    /// Replaces the queue with `tracks` and starts playing `startTrack` (or the first track).
+    func play(_ tracks: [LocalTrack], startingAt startTrack: LocalTrack? = nil, shuffled: Bool? = nil, engine: AudioEngineManager) {
+        if let shuffled { isQueueShuffled = shuffled }
+        let start = startTrack ?? (isQueueShuffled ? tracks.randomElement() : tracks.first)
+        guard let start else { return }
+        setQueue(tracks: tracks, startTrack: start)
+        engine.playTrack(start)
+    }
+
+    /// Inserts songs right after the current one ("Play Next").
+    func playNext(_ newTracks: [LocalTrack], engine: AudioEngineManager) {
+        guard !newTracks.isEmpty else { return }
+        guard let current = engine.currentTrack, let idx = activeQueue.firstIndex(where: { $0.id == current.id }) else {
+            play(newTracks, shuffled: false, engine: engine)
+            return
+        }
+        let ids = Set(newTracks.map(\.id))
+        var queue = activeQueue
+        queue.removeAll { ids.contains($0.id) && $0.id != current.id }
+        let insertAt = (queue.firstIndex(where: { $0.id == current.id }) ?? idx) + 1
+        queue.insert(contentsOf: newTracks.filter { $0.id != current.id }, at: insertAt)
+        activeQueue = queue
+        unshuffleQueue.append(contentsOf: newTracks.filter { t in !unshuffleQueue.contains(where: { $0.id == t.id }) })
+    }
+
+    /// Appends songs to the end of the queue ("Play Later").
+    func playLater(_ newTracks: [LocalTrack], engine: AudioEngineManager) {
+        guard !newTracks.isEmpty else { return }
+        guard engine.currentTrack != nil, !activeQueue.isEmpty else {
+            play(newTracks, shuffled: false, engine: engine)
+            return
+        }
+        activeQueue.append(contentsOf: newTracks)
+        unshuffleQueue.append(contentsOf: newTracks)
+    }
+
     // Continuous Immutable Logging Store
     @Published var playHistoryLog: [PlayLogEntry] = []
-    
+
     func logPlayEvent(for track: LocalTrack) {
         let entry = PlayLogEntry(
             trackId: track.id,
@@ -512,117 +539,159 @@ class AppStateManager: ObservableObject {
         playHistoryLog.append(entry)
         saveContext()
     }
-    
-    func seedPlayHistoryLogIfNeeded() {
-        guard playHistoryLog.isEmpty else { return }
-        var seeded: [PlayLogEntry] = []
-        let calendar = Calendar.current
-        
-        for track in tracks where track.playCount > 0 {
-            let baseDate = track.lastPlayedDate ?? track.dateAdded
-            for i in 0..<track.playCount {
-                let offsetDays = Double(-i * 2)
-                let entryDate = calendar.date(byAdding: .day, value: Int(offsetDays), to: baseDate) ?? baseDate
-                let entry = PlayLogEntry(
-                    trackId: track.id,
-                    title: track.title,
-                    artist: track.artist,
-                    album: track.album,
-                    genre: track.genre,
-                    duration: track.duration,
-                    timestamp: entryDate
-                )
-                seeded.append(entry)
-            }
-        }
-        if !seeded.isEmpty {
-            self.playHistoryLog = seeded.sorted(by: { $0.timestamp < $1.timestamp })
+
+
+    // MARK: - Persistence
+
+    @Published private(set) var isLibraryLoaded = false
+    private var isApplyingLoadedLibrary = false
+    private var pendingSave: Task<Void, Never>?
+    nonisolated private static let saveQueue = DispatchQueue(label: "mesh.database.save", qos: .utility)
+
+    private static var databaseURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Mesh Player")
+            .appendingPathComponent("database.sqlite")
+    }
+
+    /// Debounced, off-main write of the whole library.
+    func saveContext() {
+        guard isLibraryLoaded, !isApplyingLoadedLibrary else { return }
+        pendingSave?.cancel()
+        pendingSave = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled, let self else { return }
+            let dump = self.makeDump()
+            Self.saveQueue.async { Self.write(dump, to: Self.databaseURL) }
         }
     }
-    
-    // Write-behind engine
-    func saveContext() {
-        let appSupportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Mesh Player")
 
+    /// Immediate synchronous save, used when the app quits.
+    func saveNow() {
+        guard isLibraryLoaded else { return }
+        pendingSave?.cancel()
+        let dump = makeDump()
+        Self.saveQueue.sync { Self.write(dump, to: Self.databaseURL) }
+    }
+
+    private func makeDump() -> DatabaseDump {
+        DatabaseDump(tracks: tracks, playlists: playlists, playHistoryLog: playHistoryLog)
+    }
+
+    nonisolated private static func write(_ dump: DatabaseDump, to url: URL) {
         do {
-            if !FileManager.default.fileExists(atPath: appSupportDir.path) {
-                try FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
-            }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(dump)
+            try data.write(to: url, options: .atomic)
         } catch {
-            print("Failed to create App Support directory: \(error)")
-        }
-
-        let dbFile = appSupportDir.appendingPathComponent("database.sqlite")
-
-        let safeTracks = self.tracks
-        let safePlaylists = self.playlists
-        let safePlayHistoryLog = self.playHistoryLog
-
-        DispatchQueue.global(qos: .background).async {
-            do {
-                let encoder = JSONEncoder()
-                struct DatabaseDump: Codable {
-                    var tracks: [LocalTrack]
-                    var playlists: [Playlist]
-                    var playHistoryLog: [PlayLogEntry]?
-                }
-
-                let dump = DatabaseDump(tracks: safeTracks, playlists: safePlaylists, playHistoryLog: safePlayHistoryLog)
-                let data = try encoder.encode(dump)
-                try data.write(to: dbFile, options: .atomic)
-            } catch {
-                print("Failed context.save(): \(error)")
-            }
+            print("Failed context.save(): \(error)")
         }
     }
 
     func loadContext() {
-        let appSupportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Mesh Player")
-        let dbFile = appSupportDir.appendingPathComponent("database.sqlite")
+        let dbFile = Self.databaseURL
 
         // Migration: Check for old database location
-        let oldLibraryDir = LibraryManager.shared.libraryDirectory
-        let oldDbFile = oldLibraryDir.appendingPathComponent("database.sqlite")
-
-        if FileManager.default.fileExists(atPath: oldDbFile.path) {
-            do {
-                if !FileManager.default.fileExists(atPath: appSupportDir.path) {
-                    try FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
-                }
-                if !FileManager.default.fileExists(atPath: dbFile.path) {
-                    try FileManager.default.moveItem(at: oldDbFile, to: dbFile)
-                    print("Migrated database to Application Support.")
-                }
-            } catch {
-                print("Failed to migrate database: \(error)")
-            }
+        let oldDbFile = LibraryManager.shared.libraryDirectory.appendingPathComponent("database.sqlite")
+        if FileManager.default.fileExists(atPath: oldDbFile.path), !FileManager.default.fileExists(atPath: dbFile.path) {
+            // Copy (an instant APFS clone) rather than move, so the original stays untouched.
+            try? FileManager.default.createDirectory(at: dbFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.copyItem(at: oldDbFile, to: dbFile)
         }
 
-        guard FileManager.default.fileExists(atPath: dbFile.path) else { return }
-
-        do {
-            let data = try Data(contentsOf: dbFile)
-            struct DatabaseDump: Codable {
-                var tracks: [LocalTrack]
-                var playlists: [Playlist]
-                var playHistoryLog: [PlayLogEntry]?
+        Task.detached(priority: .userInitiated) { [self] in
+            var dump: DatabaseDump? = nil
+            var migratedArtwork = false
+            if let data = try? Data(contentsOf: dbFile) {
+                do {
+                    var decoded = try JSONDecoder().decode(DatabaseDump.self, from: data)
+                    migratedArtwork = Self.migrateInlineArtwork(&decoded)
+                    dump = decoded
+                } catch {
+                    // Never let a later save overwrite a library we couldn't read: set it aside first.
+                    print("Failed loadContext(): \(error)")
+                    let stamp = Int(Date().timeIntervalSince1970)
+                    let backup = dbFile.deletingLastPathComponent().appendingPathComponent("database-unreadable-\(stamp).sqlite")
+                    try? FileManager.default.moveItem(at: dbFile, to: backup)
+                }
             }
-            let decoder = JSONDecoder()
-            let dump = try decoder.decode(DatabaseDump.self, from: data)
-
-            DispatchQueue.main.async {
-                self.tracks = dump.tracks
-                self.playlists = dump.playlists
-                self.playHistoryLog = dump.playHistoryLog ?? []
-                self.seedPlayHistoryLogIfNeeded()
+            let loaded = dump
+            let migrated = migratedArtwork
+            await MainActor.run {
+                if let loaded {
+                    self.isApplyingLoadedLibrary = true
+                    self.tracks = loaded.tracks
+                    if !loaded.playlists.isEmpty { self.playlists = loaded.playlists }
+                    self.playHistoryLog = loaded.playHistoryLog ?? []
+                    self.isApplyingLoadedLibrary = false
+                }
+                self.isLibraryLoaded = true
+                if migrated { self.saveContext() }
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(4))
+                    guard let self else { return }
+                    CopyrightResolver.shared.backfillFromTags(self)
+                }
             }
-        } catch {
-            print("Failed loadContext(): \(error)")
         }
     }
-    
+
+    /// Moves artwork that older builds stored inline in the database into the on-disk artwork cache.
+    nonisolated private static func migrateInlineArtwork(_ dump: inout DatabaseDump) -> Bool {
+        var migrated = false
+        for i in dump.tracks.indices {
+            if let data = dump.tracks[i].embeddedArtData {
+                ArtworkStore.shared.store(data, forKey: dump.tracks[i].artworkKey, overwrite: false)
+                dump.tracks[i].embeddedArtData = nil
+                migrated = true
+            }
+        }
+        for p in dump.playlists.indices {
+            for t in dump.playlists[p].playlistTracks.indices where dump.playlists[p].playlistTracks[t].track.embeddedArtData != nil {
+                dump.playlists[p].playlistTracks[t].track.embeddedArtData = nil
+                migrated = true
+            }
+        }
+        return migrated
+    }
+
+    // MARK: - Settings (persisted in UserDefaults)
+
+    private func persist(_ value: Any, _ key: String) {
+        guard !isLoadingSettings else { return }
+        UserDefaults.standard.set(value, forKey: "settings.\(key)")
+    }
+
+    private var isLoadingSettings = false
+
+    private func loadSettings() {
+        isLoadingSettings = true
+        defer { isLoadingSettings = false }
+        let d = UserDefaults.standard
+        func bool(_ key: String, _ fallback: Bool) -> Bool { d.object(forKey: "settings.\(key)") as? Bool ?? fallback }
+        if let theme = d.string(forKey: "settings.currentThemeName") { currentThemeName = theme }
+        if let sort = d.string(forKey: "settings.sortCriteria") { sortCriteria = sort }
+        if let albumSort = d.string(forKey: "settings.albumSortCriteria"), let c = AlbumSortCriteria(rawValue: albumSort) { albumSortCriteria = c }
+        sortAscending = bool("sortAscending", false)
+        autoScrollLyrics = bool("autoScrollLyrics", true)
+        showDockArtwork = bool("showDockArtwork", false)
+        enableAtmos = bool("enableAtmos", true)
+        spatialAudioActive = bool("spatialAudioActive", false)
+        animatedArtworkEnabled = bool("animatedArtworkEnabled", true)
+        removePlaylistSongsFromLibrary = bool("removePlaylistSongsFromLibrary", false)
+        showTimeColumn = bool("showTimeColumn", true)
+        showArtistColumn = bool("showArtistColumn", true)
+        showYearColumn = bool("showYearColumn", true)
+        showAlbumColumn = bool("showAlbumColumn", true)
+        showGenreColumn = bool("showGenreColumn", true)
+        showFavoritesColumn = bool("showFavoritesColumn", true)
+        showPlaysColumn = bool("showPlaysColumn", true)
+        showDateAddedColumn = bool("showDateAddedColumn", true)
+        showFormatColumn = bool("showFormatColumn", true)
+    }
+
+    // MARK: - Queue navigation
+
     func toggleShuffle(currentTrack: LocalTrack?) {
         isQueueShuffled.toggle()
         if isQueueShuffled {
@@ -637,274 +706,405 @@ class AppStateManager: ObservableObject {
             activeQueue = unshuffleQueue
         }
     }
-    
+
     func playNext(engine: AudioEngineManager) {
         guard let current = engine.currentTrack else { return }
-        
+
         if repeatMode == 2 {
             engine.playTrack(current)
             return
         }
-        
+
         let queueToUse = activeQueue.isEmpty ? tracks : activeQueue
         if queueToUse.isEmpty { return }
-        
+
         if let idx = queueToUse.firstIndex(where: { $0.id == current.id }) {
             let nextIdx = idx + 1
             if nextIdx < queueToUse.count {
                 engine.playTrack(queueToUse[nextIdx])
+            } else if repeatMode == 1 {
+                engine.playTrack(queueToUse[0])
             } else {
-                if repeatMode == 1 {
-                    engine.playTrack(queueToUse[0])
-                } else {
-                    engine.pause() // stop at end of queue
-                }
+                engine.pause() // stop at end of queue
             }
         }
     }
-    
+
     func playPrevious(engine: AudioEngineManager) {
         guard let current = engine.currentTrack else { return }
-        
+
         // If we are more than 3 seconds in, previous resets the track
         if engine.currentTime > 3.0 {
             engine.seek(to: 0)
             return
         }
-        
+
         if repeatMode == 2 {
             engine.playTrack(current)
             return
         }
-        
+
         let queueToUse = activeQueue.isEmpty ? tracks : activeQueue
         if queueToUse.isEmpty { return }
-        
+
         if let idx = queueToUse.firstIndex(where: { $0.id == current.id }) {
             let prevIdx = idx - 1
             if prevIdx >= 0 {
                 engine.playTrack(queueToUse[prevIdx])
+            } else if repeatMode == 1 {
+                engine.playTrack(queueToUse[queueToUse.count - 1])
             } else {
-                if repeatMode == 1 {
-                    engine.playTrack(queueToUse[queueToUse.count - 1])
-                } else {
-                    engine.seek(to: 0)
-                }
+                engine.seek(to: 0)
             }
         }
     }
+
     @Published var searchKeyword: String = ""
-    @Published var sortCriteria: String = "dateAdded" // "dateAdded", "title", "artist", "album", "playCount", "duration"
-    @Published var sortAscending: Bool = false
+    @Published var sortCriteria: String = "dateAdded" { didSet { persist(sortCriteria, "sortCriteria") } } // "dateAdded", "title", "artist", "album", "playCount", "duration"
+    @Published var sortAscending: Bool = false { didSet { persist(sortAscending, "sortAscending") } }
     @Published var selectedTrackIds: Set<UUID> = []
     var lastSelectedTrackIndex: Int? = nil
     @Published var activeFilterType: String? = nil
     @Published var activeFilterValue: String? = nil
     @Published var isShuffleActive: Bool = false
-    
-    // Core settings mapped from user preferences settings panel
-    @Published var currentThemeName: String = "Mesh Default (Apple Music)"
-    @Published var autoScrollLyrics: Bool = true
-    @Published var showDockArtwork: Bool = false
-    @Published var enableAtmos: Bool = true
-    @Published var eqMode: String = "Flat (Default Lossless)"
-    @Published var crossfadeGap: Double = 4.0
-    @Published var spatialAudioActive: Bool = false
-    
-    // Visible details columns checkboxes (matching React preferences)
-    @Published var showTimeColumn: Bool = true
-    @Published var showArtistColumn: Bool = true
-    @Published var showYearColumn: Bool = true
-    @Published var showAlbumColumn: Bool = true
-    @Published var showGenreColumn: Bool = true
-    @Published var showFavoritesColumn: Bool = true
-    @Published var showPlaysColumn: Bool = true
-    @Published var showDateAddedColumn: Bool = true
-    @Published var showFormatColumn: Bool = true
-    
-    @Published var enableLastFm: Bool = UserDefaults.standard.bool(forKey: "enableLastFm") {
-        didSet { UserDefaults.standard.set(enableLastFm, forKey: "enableLastFm") }
-    }
-    @Published var lastFmUsername: String = ""
-    @Published var lastFmSessionKey: String = ""
 
-    
-    var theme: ThemeColor {
-        switch currentThemeName {
-        case "Mesh Default (Apple Music)":
-            return ThemeColor(
-                background: Color(red: 0.12, green: 0.12, blue: 0.12), // Apple Music main BG (#1E1E1E approx)
-                sidebarBackground: Color(red: 0.16, green: 0.16, blue: 0.16), // Apple Music sidebar
-                textPrimary: .white,
-                textSecondary: Color.white.opacity(0.6),
-                accent: Color(red: 0.98, green: 0.18, blue: 0.33),
-                cardBackground: Color.white.opacity(0.08),
-                isDark: true
-            )
-        case "Midnight Indigo":
-            return ThemeColor(
-                background: Color(red: 0.04, green: 0.02, blue: 0.08),
-                sidebarBackground: Color(red: 0.07, green: 0.04, blue: 0.12),
-                textPrimary: .white,
-                textSecondary: Color.white.opacity(0.6),
-                accent: Color(red: 0.60, green: 0.35, blue: 0.95),
-                cardBackground: Color.white.opacity(0.08),
-                isDark: true
-            )
-        case "Sakura Blossom":
-            return ThemeColor(
-                background: Color(red: 1.00, green: 0.94, blue: 0.95),
-                sidebarBackground: Color(red: 1.00, green: 0.89, blue: 0.91),
-                textPrimary: Color(red: 0.36, green: 0.18, blue: 0.21),
-                textSecondary: Color(red: 0.36, green: 0.18, blue: 0.21).opacity(0.6),
-                accent: Color(red: 1.00, green: 0.42, blue: 0.54),
-                cardBackground: Color.white.opacity(0.8),
-                isDark: false
-            )
-        case "Sunset Glow":
-            return ThemeColor(
-                background: Color(red: 0.12, green: 0.06, blue: 0.04),
-                sidebarBackground: Color(red: 0.18, green: 0.10, blue: 0.07),
-                textPrimary: Color(red: 0.92, green: 0.85, blue: 0.82),
-                textSecondary: Color(red: 0.92, green: 0.85, blue: 0.82).opacity(0.6),
-                accent: .orange,
-                cardBackground: Color(red: 0.22, green: 0.12, blue: 0.09),
-                isDark: true
-            )
-        case "Cyber Neon":
-            return ThemeColor(
-                background: Color.black,
-                sidebarBackground: Color(red: 0.05, green: 0.02, blue: 0.10),
-                textPrimary: Color(red: 0.85, green: 0.89, blue: 1.00),
-                textSecondary: Color(red: 0.85, green: 0.89, blue: 1.00).opacity(0.6),
-                accent: .cyan,
-                cardBackground: Color(red: 0.08, green: 0.04, blue: 0.14),
-                isDark: true
-            )
-        case "True Black":
-            return ThemeColor(
-                background: .black,
-                sidebarBackground: .black,
-                textPrimary: .white,
-                textSecondary: Color.white.opacity(0.6),
-                accent: .white,
-                cardBackground: Color(white: 0.03),
-                isDark: true
-            )
-        case "Midnight Blue":
-            return ThemeColor(
-                background: Color(red: 0.0, green: 0.04, blue: 0.09),
-                sidebarBackground: Color(red: 0.0, green: 0.07, blue: 0.15),
-                textPrimary: Color(red: 0.88, green: 0.91, blue: 0.94),
-                textSecondary: Color(red: 0.88, green: 0.91, blue: 0.94).opacity(0.6),
-                accent: Color(red: 0.22, green: 0.74, blue: 0.97),
-                cardBackground: Color(red: 0.0, green: 0.09, blue: 0.19),
-                isDark: true
-            )
-        case "Y2K / Skeuomorphic (Frutiger Aero)":
-            return ThemeColor(
-                background: Color(red: 0.89, green: 0.96, blue: 0.98),
-                sidebarBackground: Color(red: 0.95, green: 0.98, blue: 1.0),
-                textPrimary: Color(red: 0.05, green: 0.23, blue: 0.40),
-                textSecondary: Color(red: 0.05, green: 0.23, blue: 0.40).opacity(0.6),
-                accent: Color(red: 0.13, green: 0.59, blue: 0.95),
-                cardBackground: .white,
-                isDark: false
-            )
-        case "Cyberpunk":
-            return ThemeColor(
-                background: Color(red: 0.06, green: 0.06, blue: 0.08),
-                sidebarBackground: Color(red: 0.08, green: 0.08, blue: 0.11),
-                textPrimary: Color(red: 1.0, green: 0.92, blue: 0.23),
-                textSecondary: Color(red: 1.0, green: 0.92, blue: 0.23).opacity(0.6),
-                accent: Color(red: 0.0, green: 0.90, blue: 1.0),
-                cardBackground: Color(red: 0.11, green: 0.11, blue: 0.14),
-                isDark: true
-            )
-        case "Vaporwave":
-            return ThemeColor(
-                background: Color(red: 0.90, green: 0.80, blue: 0.95),
-                sidebarBackground: Color(red: 0.95, green: 0.90, blue: 0.98),
-                textPrimary: Color(red: 0.29, green: 0.08, blue: 0.29),
-                textSecondary: Color(red: 0.29, green: 0.08, blue: 0.29).opacity(0.6),
-                accent: Color(red: 0.78, green: 0.15, blue: 1.0),
-                cardBackground: Color.white.opacity(0.5),
-                isDark: false
-            )
-        case "Warm Coffee":
-            return ThemeColor(
-                background: Color(red: 0.96, green: 0.92, blue: 0.87),
-                sidebarBackground: Color(red: 0.92, green: 0.87, blue: 0.80),
-                textPrimary: Color(red: 0.29, green: 0.23, blue: 0.20),
-                textSecondary: Color(red: 0.29, green: 0.23, blue: 0.20).opacity(0.6),
-                accent: Color(red: 0.55, green: 0.35, blue: 0.17),
-                cardBackground: Color(red: 0.98, green: 0.93, blue: 0.85),
-                isDark: false
-            )
-        default: // Space Gray / Classic Dark
-            return ThemeColor(
-                background: Color(red: 0.09, green: 0.09, blue: 0.11),
-                sidebarBackground: Color(red: 0.06, green: 0.06, blue: 0.08),
-                textPrimary: .white,
-                textSecondary: Color.white.opacity(0.6),
-                accent: Color(red: 0.98, green: 0.18, blue: 0.33), // Apple Crimson Red
-                cardBackground: Color.white.opacity(0.06),
-                isDark: true
-            )
-        }
+    // Core settings mapped from user preferences settings panel
+    @Published var currentThemeName: String = "Mesh Default (Apple Music)" { didSet { persist(currentThemeName, "currentThemeName") } }
+    @Published var autoScrollLyrics: Bool = true { didSet { persist(autoScrollLyrics, "autoScrollLyrics") } }
+    @Published var showDockArtwork: Bool = false { didSet { persist(showDockArtwork, "showDockArtwork") } }
+    @Published var enableAtmos: Bool = true { didSet { persist(enableAtmos, "enableAtmos") } }
+    @Published var spatialAudioActive: Bool = false { didSet { persist(spatialAudioActive, "spatialAudioActive") } }
+    @Published var animatedArtworkEnabled: Bool = true { didSet { persist(animatedArtworkEnabled, "animatedArtworkEnabled") } }
+
+    /// Per-playlist sort. Playlists open in their own order until a column header is clicked.
+    @Published var playlistSorts: [UUID: PlaylistSort] = [:]
+    struct PlaylistSort: Equatable {
+        var criteria = "playlistOrder"
+        var ascending = true
     }
-    
+
+    // Visible details columns
+    @Published var showTimeColumn: Bool = true { didSet { persist(showTimeColumn, "showTimeColumn") } }
+    @Published var showArtistColumn: Bool = true { didSet { persist(showArtistColumn, "showArtistColumn") } }
+    @Published var showYearColumn: Bool = true { didSet { persist(showYearColumn, "showYearColumn") } }
+    @Published var showAlbumColumn: Bool = true { didSet { persist(showAlbumColumn, "showAlbumColumn") } }
+    @Published var showGenreColumn: Bool = true { didSet { persist(showGenreColumn, "showGenreColumn") } }
+    @Published var showFavoritesColumn: Bool = true { didSet { persist(showFavoritesColumn, "showFavoritesColumn") } }
+    @Published var showPlaysColumn: Bool = true { didSet { persist(showPlaysColumn, "showPlaysColumn") } }
+    @Published var showDateAddedColumn: Bool = true { didSet { persist(showDateAddedColumn, "showDateAddedColumn") } }
+    @Published var showFormatColumn: Bool = true { didSet { persist(showFormatColumn, "showFormatColumn") } }
+
+    var theme: ThemeColor { ThemeCatalog.theme(named: currentThemeName) }
+
     @Published var playlists: [Playlist] = [
-        Playlist(name: "Favorites (Apple Music)", description: "Imported from Apple Music App preferences", isImported: true, playlistTracks: [])
-    ]
-    
-    @Published var tracks: [LocalTrack] = []
-    
+        Playlist(name: "Favorites (Apple Music)", description: "Every song you've loved", isImported: true, playlistTracks: [])
+    ] {
+        didSet {
+            playlistsVersion &+= 1
+            saveContext()
+        }
+    }
+
+    @Published var tracks: [LocalTrack] = [] {
+        didSet {
+            libraryVersion &+= 1
+            saveContext()
+        }
+    }
+
+    // MARK: - Library mutation
+
+    private func indexOfExisting(_ track: LocalTrack) -> Int? {
+        if let path = track.fileURL?.path, let idx = trackIndexByPath[path] { return idx }
+        if let pid = track.persistentID, let idx = tracks.firstIndex(where: { $0.persistentID == pid }) { return idx }
+        return tracks.firstIndex(where: { $0.title == track.title && $0.artist == track.artist && $0.album == track.album })
+    }
+
     func upsertTrack(_ track: LocalTrack) {
-        if let idx = tracks.firstIndex(where: {
-            ($0.fileURL != nil && $0.fileURL?.path == track.fileURL?.path) ||
-            ($0.title == track.title && $0.artist == track.artist && $0.album == track.album)
-        }) {
-            // Update metadata but keep user-specific state like isFavorite, playCount, dateAdded
-            var updated = tracks[idx]
-            updated.title = track.title
-            updated.artist = track.artist
-            updated.album = track.album
-            updated.genre = track.genre
-            updated.duration = track.duration
-            updated.fileURL = track.fileURL
-            updated.coverImageName = track.coverImageName
-            updated.localCoverURL = track.localCoverURL
-            updated.embeddedArtData = track.embeddedArtData
-            updated.isAtmos = track.isAtmos
-            updated.fileSize = track.fileSize
-            updated.lyrics = track.lyrics
-            updated.format = track.format
-            tracks[idx] = updated
-        } else {
-            tracks.insert(track, at: 0)
-        }
+        mergeImportedTracks([track])
     }
-    
+
+    /// Merges freshly imported tracks into the library in a single mutation, keeping
+    /// user-specific state (favorites, play counts, date added) for tracks we already know.
+    @discardableResult
+    func mergeImportedTracks(_ incoming: [LocalTrack]) -> (added: Int, updated: Int) {
+        guard !incoming.isEmpty else { return (0, 0) }
+        var updatedTracks = tracks
+        let pathIndex = trackIndexByPath
+        var metaIndex: [String: Int] = [:]
+        for (i, t) in updatedTracks.enumerated() {
+            metaIndex["\(t.title)|\(t.artist)|\(t.album)"] = i
+        }
+        var added = 0, updated = 0
+        var newTracks: [LocalTrack] = []
+        var newKeys = Set<String>()
+
+        for track in incoming {
+            let metaKey = "\(track.title)|\(track.artist)|\(track.album)"
+            let pathKey = track.fileURL.map { "path:" + $0.path }
+            // Skip duplicates inside the same import batch.
+            if newKeys.contains("meta:" + metaKey) || (pathKey.map { newKeys.contains($0) } ?? false) { continue }
+            let existing = track.fileURL.flatMap { pathIndex[$0.path] } ?? metaIndex[metaKey]
+            if let idx = existing, idx >= 0, idx < updatedTracks.count {
+                var merged = track
+                let old = updatedTracks[idx]
+                merged.id = old.id
+                merged.dateAdded = min(old.dateAdded, track.dateAdded)
+                merged.isFavorite = old.isFavorite || track.isFavorite
+                merged.playCount = max(old.playCount, track.playCount)
+                merged.lastPlayedDate = [old.lastPlayedDate, track.lastPlayedDate].compactMap { $0 }.max()
+                merged.artworkColors = old.artworkColors ?? track.artworkColors
+                if merged.copyright == nil { merged.copyright = old.copyright }
+                if merged.lyrics.isEmpty { merged.lyrics = old.lyrics }
+                updatedTracks[idx] = merged
+                updated += 1
+            } else {
+                newTracks.append(track)
+                if let pathKey { newKeys.insert(pathKey) }
+                newKeys.insert("meta:" + metaKey)
+                added += 1
+            }
+        }
+        updatedTracks.insert(contentsOf: newTracks, at: 0)
+        tracks = updatedTracks
+        return (added, updated)
+    }
+
+    /// Adds imported playlists, replacing earlier imports that have the same name.
+    func mergeImportedPlaylists(_ incoming: [Playlist]) {
+        guard !incoming.isEmpty else { return }
+        var updated = playlists
+        for playlist in incoming {
+            if let idx = updated.firstIndex(where: { $0.isImported && ($0.name == playlist.name || ($0.appleMusicID != nil && $0.appleMusicID == playlist.appleMusicID)) }) {
+                var replacement = playlist
+                let existing = updated[idx]
+                replacement.id = existing.id
+                replacement.artworkFileName = existing.artworkFileName
+                replacement.excludeFromLibrary = playlist.excludeFromLibrary ?? existing.excludeFromLibrary
+                replacement.dateCreated = existing.dateCreated ?? playlist.dateCreated
+                updated[idx] = replacement
+            } else {
+                updated.append(playlist)
+            }
+        }
+        playlists = updated
+    }
+
+    func removeTracks(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        tracks.removeAll { ids.contains($0.id) }
+        var updated = playlists
+        for i in updated.indices {
+            updated[i].playlistTracks.removeAll { ids.contains($0.track.id) }
+        }
+        playlists = updated
+        selectedTrackIds.subtract(ids)
+    }
+
     func addTrackToPlaylist(track: LocalTrack, playlistId: UUID) {
-        if let idx = playlists.firstIndex(where: { $0.id == playlistId }) {
-            playlists[idx].playlistTracks.append(PlaylistTrack(track: track))
-        }
+        addTracksToPlaylist([track], playlistId: playlistId)
     }
-    
+
+    func addTracksToPlaylist(_ newTracks: [LocalTrack], playlistId: UUID) {
+        guard let playlist = playlists.first(where: { $0.id == playlistId }), !playlist.isSmart else { return }
+        if playlist.isAppleMusicFavorites {
+            var updated = tracks
+            let ids = Set(newTracks.map(\.id))
+            for i in updated.indices where ids.contains(updated[i].id) { updated[i].isFavorite = true }
+            tracks = updated
+            return
+        }
+        updatePlaylist(playlistId) { $0.playlistTracks.append(contentsOf: newTracks.map { PlaylistTrack(track: $0) }) }
+    }
+
+    /// Playlists songs can be added to (smart playlists fill themselves).
+    var editablePlaylists: [Playlist] { playlists.filter { !$0.isSmart } }
+
     func createNewPlaylist(name: String, initialTrack: LocalTrack? = nil) {
-        var newPlaylist = Playlist(name: name, description: "", isImported: false, playlistTracks: [])
-        if let track = initialTrack {
-            newPlaylist.playlistTracks.append(PlaylistTrack(track: track))
-        }
-        playlists.append(newPlaylist)
+        createNewPlaylist(name: name, tracks: initialTrack.map { [$0] } ?? [])
     }
-    
+
+    @discardableResult
+    func createNewPlaylist(name: String, tracks initialTracks: [LocalTrack]) -> Playlist {
+        var newPlaylist = Playlist(name: name, description: "", isImported: false, playlistTracks: initialTracks.map { PlaylistTrack(track: $0) })
+        newPlaylist.dateCreated = Date()
+        newPlaylist.dateModified = Date()
+        playlists.append(newPlaylist)
+        return newPlaylist
+    }
+
+    @discardableResult
+    func createSmartPlaylist(name: String, rules: SmartPlaylistRules) -> Playlist {
+        var playlist = Playlist(name: name, description: "", isImported: false, playlistTracks: [])
+        playlist.smartRules = rules
+        playlist.dateCreated = Date()
+        playlist.dateModified = Date()
+        playlists.append(playlist)
+        return playlist
+    }
+
+    func updatePlaylist(_ id: UUID, _ change: (inout Playlist) -> Void) {
+        guard let idx = playlists.firstIndex(where: { $0.id == id }) else { return }
+        var copy = playlists[idx]
+        change(&copy)
+        copy.dateModified = Date()
+        playlists[idx] = copy
+    }
+
+    func duplicatePlaylist(_ id: UUID) {
+        guard let original = playlists.first(where: { $0.id == id }) else { return }
+        var copy = original
+        copy.id = UUID()
+        copy.name = original.name + " Copy"
+        copy.isImported = false
+        copy.appleMusicID = nil
+        copy.dateCreated = Date()
+        copy.dateModified = Date()
+        copy.playlistTracks = original.playlistTracks.map { PlaylistTrack(track: $0.track) }
+        if let file = original.artworkFileName {
+            let newName = copy.id.uuidString + "." + (file as NSString).pathExtension
+            try? FileManager.default.copyItem(at: Self.playlistArtworkFolder.appendingPathComponent(file), to: Self.playlistArtworkFolder.appendingPathComponent(newName))
+            copy.artworkFileName = newName
+        }
+        if let idx = playlists.firstIndex(where: { $0.id == id }) {
+            playlists.insert(copy, at: idx + 1)
+        } else {
+            playlists.append(copy)
+        }
+        selectedTab = "playlist-\(copy.id.uuidString)"
+    }
+
+    /// Reorders playlist entries (playlist order view only).
+    func movePlaylistTracks(_ playlistId: UUID, trackIds: [UUID], toIndex destination: Int) {
+        updatePlaylist(playlistId) { playlist in
+            let moving = trackIds.compactMap { id in playlist.playlistTracks.first(where: { $0.track.id == id }) }
+            guard !moving.isEmpty else { return }
+            let movingIds = Set(moving.map(\.id))
+            let before = playlist.playlistTracks.prefix(destination).filter { movingIds.contains($0.id) }.count
+            playlist.playlistTracks.removeAll { movingIds.contains($0.id) }
+            let insertAt = max(0, min(playlist.playlistTracks.count, destination - before))
+            playlist.playlistTracks.insert(contentsOf: moving, at: insertAt)
+        }
+    }
+
+    static var playlistArtworkFolder: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Mesh Player/Playlist Artwork", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    func setPlaylistArtwork(_ id: UUID, from url: URL?) {
+        let folder = Self.playlistArtworkFolder
+        if let old = playlists.first(where: { $0.id == id })?.artworkFileName {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(old))
+        }
+        guard let url else {
+            updatePlaylist(id) { $0.artworkFileName = nil }
+            return
+        }
+        // A fresh name per change so cached images of the old cover are never reused.
+        let name = "\(id.uuidString)-\(Int(Date().timeIntervalSince1970)).\(url.pathExtension.isEmpty ? "jpg" : url.pathExtension.lowercased())"
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        do {
+            try FileManager.default.copyItem(at: url, to: folder.appendingPathComponent(name))
+            updatePlaylist(id) { $0.artworkFileName = name }
+        } catch {
+            print("Couldn't set playlist artwork: \(error)")
+        }
+    }
+
+    func playlistArtworkURL(_ playlist: Playlist) -> URL? {
+        playlist.artworkFileName.map { Self.playlistArtworkFolder.appendingPathComponent($0) }
+    }
+
+    /// Writes an .m3u8 file listing the playlist's songs.
+    func exportPlaylistM3U(_ playlist: Playlist, to url: URL) throws {
+        var lines = ["#EXTM3U", "#PLAYLIST:\(playlist.name)"]
+        for track in resolvedTracks(of: playlist) {
+            guard let path = track.fileURL?.path else { continue }
+            lines.append("#EXTINF:\(Int(track.duration)),\(track.artist) - \(track.title)")
+            lines.append(path)
+        }
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - Library maintenance
+
+    /// Empties the library (songs, playlists, history). Audio files on disk are not touched.
+    func clearLibrary() {
+        activeQueue = []
+        unshuffleQueue = []
+        selectedTrackIds = []
+        playHistoryLog = []
+        playlistSorts = [:]
+        tracks = []
+        playlists = [Playlist(name: "Favorites (Apple Music)", description: "Every song you've loved", isImported: true, playlistTracks: [])]
+        selectedTab = "home"
+        saveNow()
+    }
+
+    func clearPlayHistory() {
+        playHistoryLog = []
+        saveContext()
+    }
+
+    func resetPlayCounts() {
+        var updated = tracks
+        for i in updated.indices {
+            updated[i].playCount = 0
+            updated[i].lastPlayedDate = nil
+        }
+        tracks = updated
+        playHistoryLog = []
+    }
+
+    func clearFavorites() {
+        var updated = tracks
+        for i in updated.indices { updated[i].isFavorite = false }
+        tracks = updated
+    }
+
+    func removeMissingTracks() -> Int {
+        let missing = tracks.filter { t in t.fileURL.map { !FileManager.default.fileExists(atPath: $0.path) } ?? true }
+        removeTracks(ids: Set(missing.map(\.id)))
+        return missing.count
+    }
+
+    /// Batch version of `setCopyright` used by the background tag reader.
+    func setCopyrights(_ byAlbum: [String: String]) {
+        var updated = tracks
+        var changed = false
+        for i in updated.indices where (updated[i].copyright ?? "").isEmpty {
+            if let value = byAlbum[updated[i].album] {
+                updated[i].copyright = value
+                changed = true
+            }
+        }
+        if changed { tracks = updated }
+    }
+
+    /// Stores a copyright line for every song on an album so it shows instantly next time.
+    func setCopyright(_ copyright: String, forAlbum album: String) {
+        guard !copyright.isEmpty else { return }
+        var updated = tracks
+        var changed = false
+        for i in updated.indices where updated[i].album == album && (updated[i].copyright ?? "").isEmpty {
+            updated[i].copyright = copyright
+            changed = true
+        }
+        if changed { tracks = updated }
+    }
+
     func deletePlaylist(_ id: UUID) {
         guard let index = playlists.firstIndex(where: { $0.id == id }) else { return }
         let playlist = playlists[index]
+        if let art = playlist.artworkFileName {
+            try? FileManager.default.removeItem(at: Self.playlistArtworkFolder.appendingPathComponent(art))
+        }
         playlists.remove(at: index)
-        
+
         if removePlaylistSongsFromLibrary {
             let trackIds = Set(playlist.tracks.map { $0.id })
             tracks.removeAll { trackIds.contains($0.id) }
@@ -913,75 +1113,231 @@ class AppStateManager: ObservableObject {
             selectedTab = "songs"
         }
     }
-    
+
     func removeTrackFromPlaylist(trackId: UUID, playlistId: UUID) {
-        guard let index = playlists.firstIndex(where: { $0.id == playlistId }) else { return }
-        playlists[index].playlistTracks.removeAll { $0.track.id == trackId }
-        
-        if removePlaylistSongsFromLibrary {
-            tracks.removeAll { $0.id == trackId }
+        removeTracksFromPlaylist([trackId], playlistId: playlistId)
+    }
+
+    func removeTracksFromPlaylist(_ trackIds: [UUID], playlistId: UUID) {
+        let ids = Set(trackIds)
+        updatePlaylist(playlistId) { $0.playlistTracks.removeAll { ids.contains($0.track.id) } }
+        // Loved songs live on the track itself, so removing from Favorites un-loves them.
+        if let playlist = playlists.first(where: { $0.id == playlistId }), playlist.isAppleMusicFavorites {
+            var updated = tracks
+            for i in updated.indices where ids.contains(updated[i].id) { updated[i].isFavorite = false }
+            tracks = updated
         }
     }
-    
+
     func toggleFavorite(track: LocalTrack) {
-        if let idx = tracks.firstIndex(where: { $0.id == track.id }) {
+        if let idx = trackIndexById[track.id] ?? tracks.firstIndex(where: { $0.id == track.id }) {
             tracks[idx].isFavorite.toggle()
+            LastFMService.shared.setLoved(tracks[idx], loved: tracks[idx].isFavorite)
         }
     }
-    
-    // MARK: - Dynamic Library Grouping Lists for Albums/Artists/Genres
+
+    func isFavorite(_ trackId: UUID) -> Bool {
+        guard let idx = trackIndexById[trackId], idx < tracks.count else { return false }
+        return tracks[idx].isFavorite
+    }
+
+    func track(withId id: UUID) -> LocalTrack? {
+        guard let idx = trackIndexById[id], idx < tracks.count else { return nil }
+        return tracks[idx]
+    }
+
+    /// Resolves a playlist's tracks against the live library so edits (favorites, play counts) show up.
+    func resolvedTracks(of playlist: Playlist) -> [LocalTrack] {
+        if let rules = playlist.smartRules {
+            return smartTracks(playlist.id, rules: rules)
+        }
+        let explicit = playlist.playlistTracks.map { track(withId: $0.track.id) ?? $0.track }
+        if playlist.isAppleMusicFavorites {
+            let explicitIds = Set(explicit.map(\.id))
+            return explicit + tracks.filter { $0.isFavorite && !explicitIds.contains($0.id) }
+        }
+        return explicit
+    }
+
+    private func smartTracks(_ id: UUID, rules: SmartPlaylistRules) -> [LocalTrack] {
+        validateDerived()
+        let key = "\(libraryVersion)-\(rules.hashValue)"
+        if let cached = derived.smart[id], cached.key == key { return cached.tracks }
+        let result = rules.evaluate(libraryTracks, seed: id)
+        derived.smart[id] = (key, result)
+        return result
+    }
+
+    var currentPlaylist: Playlist? {
+        guard let tab = selectedTab, tab.hasPrefix("playlist-"),
+              let uuid = UUID(uuidString: String(tab.dropFirst("playlist-".count))) else { return nil }
+        return playlists.first(where: { $0.id == uuid })
+    }
+
+    func playlistSort(for id: UUID) -> PlaylistSort {
+        playlistSorts[id] ?? PlaylistSort()
+    }
+
+    // MARK: - Derived, memoized library views
+
+    private var libraryVersion = 0
+    private var playlistsVersion = 0
+    private let derived = DerivedCache()
+
+    private final class DerivedCache {
+        var version = -1
+        var exclusionVersion = ""
+        var trackIndexById: [UUID: Int] = [:]
+        var trackIndexByPath: [String: Int] = [:]
+        var excludedIds: Set<UUID> = []
+        var libraryTracks: [LocalTrack] = []
+        var albums: [LocalAlbum]?
+        var recentAlbums: [LocalAlbum]?
+        var artists: [LocalArtist]?
+        var genres: [LocalGenre]?
+        var stats: LibraryStats?
+        var smart: [UUID: (key: String, tracks: [LocalTrack])] = [:]
+        var filteredSignature = ""
+        var filtered: [LocalTrack] = []
+    }
+
+    private func validateDerived() {
+        if derived.version != libraryVersion {
+            derived.version = libraryVersion
+            var byId: [UUID: Int] = [:]
+            var byPath: [String: Int] = [:]
+            byId.reserveCapacity(tracks.count)
+            for (i, t) in tracks.enumerated() {
+                byId[t.id] = i
+                if let p = t.fileURL?.path { byPath[p] = i }
+            }
+            derived.trackIndexById = byId
+            derived.trackIndexByPath = byPath
+            derived.smart = [:]
+            derived.exclusionVersion = ""
+        }
+        let exclusionKey = "\(libraryVersion)-\(playlistsVersion)"
+        guard derived.exclusionVersion != exclusionKey else { return }
+        derived.exclusionVersion = exclusionKey
+        var excluded = Set<UUID>()
+        for playlist in playlists where playlist.hidesSongsFromLibrary && !playlist.isSmart {
+            excluded.formUnion(playlist.playlistTracks.map(\.track.id))
+        }
+        derived.excludedIds = excluded
+        derived.libraryTracks = excluded.isEmpty ? tracks : tracks.filter { !excluded.contains($0.id) }
+        derived.albums = nil
+        derived.recentAlbums = nil
+        derived.artists = nil
+        derived.genres = nil
+        derived.stats = nil
+        derived.filteredSignature = ""
+    }
+
+    private var trackIndexById: [UUID: Int] { validateDerived(); return derived.trackIndexById }
+    private var trackIndexByPath: [String: Int] { validateDerived(); return derived.trackIndexByPath }
+
+    /// Songs shown in library views: everything except songs from playlists marked "hide from library".
+    var libraryTracks: [LocalTrack] { validateDerived(); return derived.libraryTracks }
+
+    func isHiddenFromLibrary(_ id: UUID) -> Bool { validateDerived(); return derived.excludedIds.contains(id) }
+
+    /// Songs of one album in disc/track order (falls back to hidden songs when that's all there is).
+    func albumTracks(named album: String) -> [LocalTrack] {
+        var list = libraryTracks.filter { $0.album == album }
+        if list.isEmpty { list = tracks.filter { $0.album == album } }
+        return list.sorted {
+            if $0.discNumber != $1.discNumber { return $0.discNumber < $1.discNumber }
+            let a = $0.parsedTrackNumber, b = $1.parsedTrackNumber
+            if a != b { return a < b }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+    }
+
     var albumsList: [LocalAlbum] {
+        validateDerived()
+        if let cached = derived.albums { return cached }
         var dict: [String: [LocalTrack]] = [:]
-        for track in tracks {
-            dict[track.album, default: []].append(track)
-        }
-        return dict.map { (key, list) in
-            LocalAlbum(name: key, artist: list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.first!)
-        }.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        for track in libraryTracks { dict[track.album, default: []].append(track) }
+        let result = dict.map { (key, list) in
+            LocalAlbum(name: key, artist: list.first?.albumArtist ?? list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.first!)
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        derived.albums = result
+        return result
     }
-    
+
     var recentlyAddedAlbumsList: [LocalAlbum] {
+        validateDerived()
+        if let cached = derived.recentAlbums { return cached }
         var dict: [String: [LocalTrack]] = [:]
-        for track in tracks {
-            dict[track.album, default: []].append(track)
-        }
-        return dict.map { (key, list) in
-            LocalAlbum(name: key, artist: list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.max(by: { $0.dateAdded < $1.dateAdded })!)
+        for track in libraryTracks { dict[track.album, default: []].append(track) }
+        let result = dict.map { (key, list) in
+            LocalAlbum(name: key, artist: list.first?.albumArtist ?? list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.max(by: { $0.dateAdded < $1.dateAdded })!)
         }.sorted { $0.trackRepresentative.dateAdded > $1.trackRepresentative.dateAdded }
+        derived.recentAlbums = result
+        return result
     }
-    
+
     var artistsList: [LocalArtist] {
+        validateDerived()
+        if let cached = derived.artists { return cached }
         var dict: [String: [LocalTrack]] = [:]
-        for track in tracks {
-            dict[track.artist, default: []].append(track)
-        }
-        return dict.map { (key, list) in
+        for track in libraryTracks { dict[track.artist, default: []].append(track) }
+        let result = dict.map { (key, list) in
             LocalArtist(name: key, tracksCount: list.count, trackRepresentative: list.first!)
-        }.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        derived.artists = result
+        return result
     }
-    
+
     var genresList: [LocalGenre] {
+        validateDerived()
+        if let cached = derived.genres { return cached }
         var dict: [String: [LocalTrack]] = [:]
-        for track in tracks {
-            dict[track.genre, default: []].append(track)
-        }
-        return dict.map { (key, list) in
+        for track in libraryTracks { dict[track.genre, default: []].append(track) }
+        let result = dict.map { (key, list) in
             LocalGenre(name: key, tracksCount: list.count, trackRepresentative: list.first!)
-        }.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        derived.genres = result
+        return result
     }
-    
-    private var _cachedFilteredTrackIds: [UUID] = []
-    private var _lastFilterSignature: String = ""
+
+    var libraryStats: LibraryStats {
+        validateDerived()
+        if let cached = derived.stats { return cached }
+        var stats = LibraryStats()
+        var artists = Set<String>(), albums = Set<String>(), genres = Set<String>()
+        for t in libraryTracks {
+            artists.insert(t.artist)
+            albums.insert(t.album)
+            genres.insert(t.genre)
+            stats.plays += t.playCount
+            stats.listeningSeconds += t.duration * Double(t.playCount)
+        }
+        stats.songs = libraryTracks.count
+        stats.artists = artists.count
+        stats.albums = albums.count
+        stats.genres = genres.count
+        derived.stats = stats
+        return stats
+    }
+
+    /// Criteria / direction in effect for the list currently shown.
+    var effectiveSort: (criteria: String, ascending: Bool) {
+        if activeFilterType == nil, let playlist = currentPlaylist {
+            let sort = playlistSort(for: playlist.id)
+            return (sort.criteria, sort.ascending)
+        }
+        return (sortCriteria, sortAscending)
+    }
 
     var filteredTracks: [LocalTrack] {
-        let sig = "\(tracks.count)-\(selectedTab ?? "")-\(activeFilterType ?? "")-\(activeFilterValue ?? "")-\(sortCriteria)-\(sortAscending)-\(searchKeyword)"
-        if _lastFilterSignature == sig {
-            let dict = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0) })
-            return _cachedFilteredTrackIds.compactMap { dict[$0] }
-        }
-        
-        var sorted = tracks
-        
+        validateDerived()
+        let sort = effectiveSort
+        let sig = "\(libraryVersion)-\(playlistsVersion)-\(selectedTab ?? "")-\(activeFilterType ?? "")-\(activeFilterValue ?? "")-\(sort.criteria)-\(sort.ascending)-\(searchKeyword)"
+        if derived.filteredSignature == sig { return derived.filtered }
+
+        var sorted = libraryTracks
+
         // 1. First, check if there is an active sub-filter drill-down
         if let filterType = activeFilterType, let filterVal = activeFilterValue {
             if filterType == "album" {
@@ -991,92 +1347,211 @@ class AppStateManager: ObservableObject {
             } else if filterType == "genre" {
                 sorted = sorted.filter { $0.genre == filterVal }
             }
-        } else {
-            // Apply sidebar selections
-            if selectedTab == "songs" {
-                // all tracks
-            } else if let tab = selectedTab, tab.hasPrefix("playlist-") {
-                let playlistIdString = String(tab.dropFirst("playlist-".count))
-                if let playlist = playlists.first(where: { $0.id.uuidString == playlistIdString }) {
-                    if playlist.name.contains("Favorites") {
-                        sorted = tracks.filter { $0.isFavorite }
+        } else if let playlist = currentPlaylist {
+            sorted = resolvedTracks(of: playlist)
+        }
+
+        // 2. Sorting Criteria (playlists keep their own order unless the user picks a column)
+        if sort.criteria != "playlistOrder" {
+            // Precompute track numbers once instead of inside the comparator.
+            let trackNumbers: [UUID: Int] = sort.criteria == "album"
+                ? Dictionary(sorted.map { ($0.id, $0.parsedTrackNumber) }, uniquingKeysWith: { a, _ in a })
+                : [:]
+            let ascending = sort.ascending
+            let criteria = sort.criteria
+            sorted.sort { a, b in
+                let result: ComparisonResult
+                switch criteria {
+                case "title":
+                    result = a.title.localizedStandardCompare(b.title)
+                case "artist":
+                    result = a.artist.localizedStandardCompare(b.artist)
+                case "album":
+                    if a.album == b.album {
+                        if a.discNumber != b.discNumber {
+                            result = a.discNumber < b.discNumber ? .orderedAscending : .orderedDescending
+                        } else {
+                            let an = trackNumbers[a.id] ?? 0, bn = trackNumbers[b.id] ?? 0
+                            result = an == bn ? .orderedSame : (an < bn ? .orderedAscending : .orderedDescending)
+                        }
                     } else {
-                        sorted = playlist.tracks
+                        result = a.album.localizedStandardCompare(b.album)
                     }
+                case "playCount":
+                    result = a.playCount == b.playCount ? .orderedSame : (a.playCount < b.playCount ? .orderedAscending : .orderedDescending)
+                case "duration":
+                    result = a.duration == b.duration ? .orderedSame : (a.duration < b.duration ? .orderedAscending : .orderedDescending)
+                case "genre":
+                    result = a.genre.localizedStandardCompare(b.genre)
+                case "year":
+                    result = a.sortYear == b.sortYear ? .orderedSame : (a.sortYear < b.sortYear ? .orderedAscending : .orderedDescending)
+                case "favourites", "favorites":
+                    result = a.favoriteRank == b.favoriteRank ? .orderedSame : (a.favoriteRank < b.favoriteRank ? .orderedAscending : .orderedDescending)
+                case "format":
+                    result = a.format.localizedStandardCompare(b.format)
+                default: // dateAdded
+                    result = a.dateAdded == b.dateAdded ? .orderedSame : (a.dateAdded < b.dateAdded ? .orderedAscending : .orderedDescending)
                 }
-            } else if selectedTab == "recently-added" {
-                // sort default will be handled below
-            } else if selectedTab == "albums" {
-                var seen = Set<String>()
-                sorted = tracks.filter { seen.insert($0.album).inserted }
-            } else if selectedTab == "artists" {
-                var seen = Set<String>()
-                sorted = tracks.filter { seen.insert($0.artist).inserted }
-            } else if selectedTab == "genres" {
-                var seen = Set<String>()
-                sorted = tracks.filter { seen.insert($0.genre).inserted }
+
+                if result == .orderedSame {
+                    // Album order is naturally ascending even when other columns sort descending.
+                    if criteria == "album" { return a.title.localizedStandardCompare(b.title) == .orderedAscending }
+                    return a.id.uuidString < b.id.uuidString
+                }
+                if criteria == "album" && a.album == b.album { return result == .orderedAscending }
+                return ascending ? (result == .orderedAscending) : (result == .orderedDescending)
             }
         }
-        
-        // 2. Sorting Criteria
-        sorted.sort { a, b in
-            let result: ComparisonResult
-            switch sortCriteria {
-            case "title":
-                result = a.title.localizedCompare(b.title)
-            case "artist":
-                result = a.artist.localizedCompare(b.artist)
-            case "album":
-                if a.album == b.album {
-                    if a.discNumber != b.discNumber {
-                        result = a.discNumber < b.discNumber ? .orderedAscending : .orderedDescending
-                    } else if a.parsedTrackNumber != b.parsedTrackNumber {
-                        result = a.parsedTrackNumber < b.parsedTrackNumber ? .orderedAscending : .orderedDescending
-                    } else {
-                        result = .orderedSame
-                    }
-                } else {
-                    result = a.album.localizedCompare(b.album)
-                }
-            case "playCount":
-                result = a.playCount < b.playCount ? .orderedAscending : (a.playCount > b.playCount ? .orderedDescending : .orderedSame)
-            case "duration":
-                result = a.duration < b.duration ? .orderedAscending : (a.duration > b.duration ? .orderedDescending : .orderedSame)
-            case "genre":
-                result = a.genre.localizedCompare(b.genre)
-            case "favourites", "favorites":
-                let aFav = a.isFavorite ? 1 : 0
-                let bFav = b.isFavorite ? 1 : 0
-                result = aFav < bFav ? .orderedAscending : (aFav > bFav ? .orderedDescending : .orderedSame)
-            case "format":
-                let aFmt = a.isAtmos ? 1 : 0
-                let bFmt = b.isAtmos ? 1 : 0
-                result = aFmt < bFmt ? .orderedAscending : (aFmt > bFmt ? .orderedDescending : .orderedSame)
-            default: // dateAdded (or recently-added tab default)
-                result = a.dateAdded < b.dateAdded ? .orderedAscending : (a.dateAdded > b.dateAdded ? .orderedDescending : .orderedSame)
-            }
-            
-            if result == .orderedSame {
-                // Stable fallback
-                return a.id.uuidString < b.id.uuidString
-            }
-            return sortAscending ? (result == .orderedAscending) : (result == .orderedDescending)
-        }
-        
+
         // 3. Search text Filtering
-        if !searchKeyword.isEmpty {
+        let query = searchKeyword.trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty {
             sorted = sorted.filter {
-                $0.title.localizedCaseInsensitiveContains(searchKeyword) ||
-                $0.artist.localizedCaseInsensitiveContains(searchKeyword) ||
-                $0.album.localizedCaseInsensitiveContains(searchKeyword) ||
-                $0.genre.localizedCaseInsensitiveContains(searchKeyword)
+                $0.title.localizedCaseInsensitiveContains(query) ||
+                $0.artist.localizedCaseInsensitiveContains(query) ||
+                $0.album.localizedCaseInsensitiveContains(query) ||
+                $0.genre.localizedCaseInsensitiveContains(query)
             }
         }
-        
-        _cachedFilteredTrackIds = sorted.map { $0.id }
-        _lastFilterSignature = sig
-        
+
+        derived.filtered = sorted
+        derived.filteredSignature = sig
         return sorted
+    }
+}
+
+// MARK: - Theme catalog
+
+enum ThemeCatalog {
+    static let names = [
+        "Mesh Default (Apple Music)", "Space Gray", "Midnight Indigo", "Sakura Blossom", "Sunset Glow",
+        "Cyber Neon", "True Black", "Midnight Blue", "Y2K / Skeuomorphic (Frutiger Aero)", "Cyberpunk",
+        "Vaporwave", "Warm Coffee"
+    ]
+
+    static func theme(named name: String) -> ThemeColor {
+        switch name {
+        case "Mesh Default (Apple Music)":
+            return ThemeColor(
+                background: Color(red: 0.075, green: 0.075, blue: 0.086),
+                sidebarBackground: Color(red: 0.105, green: 0.105, blue: 0.118),
+                textPrimary: Color(white: 0.96),
+                textSecondary: Color.white.opacity(0.56),
+                accent: Color(red: 0.99, green: 0.24, blue: 0.40),
+                cardBackground: Color.white.opacity(0.065),
+                isDark: true
+            )
+        case "Midnight Indigo":
+            return ThemeColor(
+                background: Color(red: 0.05, green: 0.04, blue: 0.10),
+                sidebarBackground: Color(red: 0.08, green: 0.06, blue: 0.15),
+                textPrimary: .white,
+                textSecondary: Color.white.opacity(0.58),
+                accent: Color(red: 0.62, green: 0.45, blue: 1.0),
+                cardBackground: Color.white.opacity(0.07),
+                isDark: true
+            )
+        case "Sakura Blossom":
+            return ThemeColor(
+                background: Color(red: 1.00, green: 0.96, blue: 0.97),
+                sidebarBackground: Color(red: 0.99, green: 0.91, blue: 0.93),
+                textPrimary: Color(red: 0.30, green: 0.13, blue: 0.18),
+                textSecondary: Color(red: 0.30, green: 0.13, blue: 0.18).opacity(0.6),
+                accent: Color(red: 0.93, green: 0.30, blue: 0.47),
+                cardBackground: Color(red: 0.30, green: 0.13, blue: 0.18).opacity(0.06),
+                isDark: false
+            )
+        case "Sunset Glow":
+            return ThemeColor(
+                background: Color(red: 0.11, green: 0.06, blue: 0.05),
+                sidebarBackground: Color(red: 0.16, green: 0.09, blue: 0.07),
+                textPrimary: Color(red: 0.98, green: 0.92, blue: 0.88),
+                textSecondary: Color(red: 0.98, green: 0.92, blue: 0.88).opacity(0.58),
+                accent: Color(red: 1.0, green: 0.55, blue: 0.22),
+                cardBackground: Color(red: 1.0, green: 0.75, blue: 0.6).opacity(0.07),
+                isDark: true
+            )
+        case "Cyber Neon":
+            return ThemeColor(
+                background: Color(red: 0.02, green: 0.02, blue: 0.04),
+                sidebarBackground: Color(red: 0.05, green: 0.03, blue: 0.09),
+                textPrimary: Color(red: 0.88, green: 0.92, blue: 1.00),
+                textSecondary: Color(red: 0.88, green: 0.92, blue: 1.00).opacity(0.58),
+                accent: Color(red: 0.0, green: 0.92, blue: 1.0),
+                cardBackground: Color(red: 0.5, green: 0.4, blue: 1.0).opacity(0.08),
+                isDark: true
+            )
+        case "True Black":
+            return ThemeColor(
+                background: .black,
+                sidebarBackground: Color(white: 0.04),
+                textPrimary: .white,
+                textSecondary: Color.white.opacity(0.55),
+                accent: .white,
+                cardBackground: Color.white.opacity(0.06),
+                isDark: true
+            )
+        case "Midnight Blue":
+            return ThemeColor(
+                background: Color(red: 0.02, green: 0.05, blue: 0.10),
+                sidebarBackground: Color(red: 0.03, green: 0.08, blue: 0.15),
+                textPrimary: Color(red: 0.90, green: 0.93, blue: 0.97),
+                textSecondary: Color(red: 0.90, green: 0.93, blue: 0.97).opacity(0.58),
+                accent: Color(red: 0.25, green: 0.72, blue: 1.0),
+                cardBackground: Color(red: 0.4, green: 0.6, blue: 1.0).opacity(0.08),
+                isDark: true
+            )
+        case "Y2K / Skeuomorphic (Frutiger Aero)":
+            return ThemeColor(
+                background: Color(red: 0.92, green: 0.97, blue: 0.99),
+                sidebarBackground: Color(red: 0.85, green: 0.94, blue: 0.99),
+                textPrimary: Color(red: 0.05, green: 0.23, blue: 0.40),
+                textSecondary: Color(red: 0.05, green: 0.23, blue: 0.40).opacity(0.62),
+                accent: Color(red: 0.10, green: 0.56, blue: 0.95),
+                cardBackground: Color(red: 0.05, green: 0.35, blue: 0.65).opacity(0.07),
+                isDark: false
+            )
+        case "Cyberpunk":
+            return ThemeColor(
+                background: Color(red: 0.06, green: 0.06, blue: 0.08),
+                sidebarBackground: Color(red: 0.09, green: 0.09, blue: 0.12),
+                textPrimary: Color(red: 1.0, green: 0.93, blue: 0.30),
+                textSecondary: Color(red: 1.0, green: 0.93, blue: 0.30).opacity(0.58),
+                accent: Color(red: 0.0, green: 0.90, blue: 1.0),
+                cardBackground: Color.white.opacity(0.06),
+                isDark: true
+            )
+        case "Vaporwave":
+            return ThemeColor(
+                background: Color(red: 0.95, green: 0.91, blue: 0.99),
+                sidebarBackground: Color(red: 0.90, green: 0.84, blue: 0.98),
+                textPrimary: Color(red: 0.29, green: 0.08, blue: 0.33),
+                textSecondary: Color(red: 0.29, green: 0.08, blue: 0.33).opacity(0.6),
+                accent: Color(red: 0.78, green: 0.20, blue: 0.95),
+                cardBackground: Color(red: 0.45, green: 0.10, blue: 0.60).opacity(0.07),
+                isDark: false
+            )
+        case "Warm Coffee":
+            return ThemeColor(
+                background: Color(red: 0.97, green: 0.94, blue: 0.90),
+                sidebarBackground: Color(red: 0.93, green: 0.88, blue: 0.82),
+                textPrimary: Color(red: 0.25, green: 0.18, blue: 0.14),
+                textSecondary: Color(red: 0.25, green: 0.18, blue: 0.14).opacity(0.6),
+                accent: Color(red: 0.62, green: 0.38, blue: 0.18),
+                cardBackground: Color(red: 0.40, green: 0.25, blue: 0.12).opacity(0.07),
+                isDark: false
+            )
+        default: // Space Gray
+            return ThemeColor(
+                background: Color(red: 0.11, green: 0.11, blue: 0.13),
+                sidebarBackground: Color(red: 0.14, green: 0.14, blue: 0.16),
+                textPrimary: .white,
+                textSecondary: Color.white.opacity(0.58),
+                accent: Color(red: 0.55, green: 0.62, blue: 0.75),
+                cardBackground: Color.white.opacity(0.07),
+                isDark: true
+            )
+        }
     }
 }
 
@@ -1089,33 +1564,22 @@ struct InstrumentalBreakDots: View {
         let duration = max(0.1, breakEnd - breakStart)
         let elapsed = currentTime - breakStart
         let fraction = min(max(0.0, elapsed / duration), 1.0)
-        
+
         let remainingTime = breakEnd - currentTime
         let containerOpacity = remainingTime <= 0.7 ? min(max(0.0, remainingTime / 0.7), 1.0) : 1.0
-        
-        // Dot opacities
+
         let d1Opacity = min(1.0, max(0.2, fraction / 0.33))
         let d2Opacity = min(1.0, max(0.2, (fraction - 0.33) / 0.33))
         let d3Opacity = min(1.0, max(0.2, (fraction - 0.66) / 0.34))
-        
+
         HStack(spacing: 20) {
-            Circle()
-                .fill(Color.white)
-                .frame(width: 12, height: 12)
-                .opacity(d1Opacity)
-                .scaleEffect(d1Opacity > 0.6 ? 1.15 : 1.0)
-            
-            Circle()
-                .fill(Color.white)
-                .frame(width: 12, height: 12)
-                .opacity(d2Opacity)
-                .scaleEffect(d2Opacity > 0.6 ? 1.15 : 1.0)
-                
-            Circle()
-                .fill(Color.white)
-                .frame(width: 12, height: 12)
-                .opacity(d3Opacity)
-                .scaleEffect(d3Opacity > 0.6 ? 1.15 : 1.0)
+            ForEach(Array([d1Opacity, d2Opacity, d3Opacity].enumerated()), id: \.offset) { _, opacity in
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 12, height: 12)
+                    .opacity(opacity)
+                    .scaleEffect(opacity > 0.6 ? 1.15 : 1.0)
+            }
         }
         .padding(.vertical, 14)
         .opacity(containerOpacity)
@@ -1126,10 +1590,9 @@ struct DolbyAtmosBadge: View {
     var color: Color = .white
     var scale: CGFloat = 1.0
     var showText: Bool = true
-    
+
     var body: some View {
         HStack(spacing: 5 * scale) {
-            // Re-usable official Dolby symbol using high-precision path drawing
             HStack(spacing: 1.5 * scale) {
                 Path { path in
                     path.move(to: CGPoint(x: 0, y: 0))
@@ -1139,7 +1602,7 @@ struct DolbyAtmosBadge: View {
                 }
                 .fill(color)
                 .frame(width: 4 * scale, height: 8 * scale)
-                
+
                 Path { path in
                     path.move(to: CGPoint(x: 4 * scale, y: 0))
                     path.addArc(center: CGPoint(x: 4 * scale, y: 4 * scale), radius: 4 * scale, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
@@ -1150,7 +1613,7 @@ struct DolbyAtmosBadge: View {
                 .frame(width: 4 * scale, height: 8 * scale)
             }
             .frame(width: 9 * scale, height: 8 * scale)
-            
+
             if showText {
                 Text("ATMOS")
                     .font(.system(size: 8.5 * scale, weight: .black, design: .default))
@@ -1164,7 +1627,3 @@ struct DolbyAtmosBadge: View {
         .cornerRadius(4 * scale)
     }
 }
-
-
-
-

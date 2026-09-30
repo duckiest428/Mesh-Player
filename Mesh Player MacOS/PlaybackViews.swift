@@ -2,357 +2,414 @@ import AppKit
 import CoreImage
 import SwiftUI
 
-// MARK: - PlayerControlsView.swift
+// MARK: - Now Playing bar
 //
 //  PlayerControlsView.swift
 //  macOS Music Player
 //
-//  Created for Xcode Native Compile on 2026-06-14.
-//  SPDX-License-Identifier: Apache-2.0
+//  The bar deliberately does NOT observe the time tracker; only the small scrubber
+//  subview does, so the 10 Hz time updates redraw a few pixels instead of the whole bar.
 //
-
 
 struct PlayerControlsView: View {
     @ObservedObject var state: AppStateManager
     @ObservedObject var engine: AudioEngineManager
-    @ObservedObject var timeTracker: AudioTimeTracker
+    let timeTracker: AudioTimeTracker
     @Binding var showFullscreen: Bool
     @Binding var showSettings: Bool
     @Environment(\.openWindow) private var openWindow
-    
-    @State private var isHoveringArt = false
-    @State private var isHoveringArtist = false
+
     @State private var showNewPlaylistAlert = false
     @State private var newPlaylistName = ""
-    @State private var trackToAdd: LocalTrack?
-    
-    var body: some View {
-        HStack(spacing: 18) {
-            // 1. Current Album Art & Track Metadata (Left Aligned)
-            HStack(spacing: 14) {
-                Button(action: {
-                    if let track = engine.currentTrack {
-                        state.selectedTab = "albums"
-                        state.activeFilterType = "album"
-                        state.activeFilterValue = track.album
-                        showFullscreen = false
-                    }
-                }) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(state.theme.cardBackground)
-                            .frame(width: 72, height: 72)
-                            .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1)
-                        
-                        if let track = engine.currentTrack {
-                            AsyncFlexibleThumbnailView(track: track, maxPixelSize: 144, theme: state.theme, cornerRadius: 10)
-                                .frame(width: 72, height: 72)
-                                .id("\(track.id.uuidString)_\(track.embeddedArtData?.hashValue ?? 0)")
-                        } else {
-                            Image(systemName: "music.note")
-                                .font(.system(size: 26))
-                                .foregroundColor(state.theme.textSecondary)
-                        }
-                    }
-                }
-                .buttonStyle(PlainButtonStyle())
-                .scaleEffect(isHoveringArt ? 1.05 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHoveringArt)
-                .onHover { isHoveringArt = $0 }
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(engine.currentTrack?.title ?? "Not Playing")
-                            .font(.system(size: 20, weight: .black, design: .default))
-                            .foregroundColor(state.theme.textPrimary)
-                            .lineLimit(1)
-                            
-                        if let track = engine.currentTrack {
-                            Menu {
-                                Button("Play") {
-                                    engine.playTrack(track)
-                                }
-                                
-                                Divider()
-                                
-                                Button(action: {
-                                    state.toggleFavorite(track: track)
-                                }) {
-                                    let isFav = track.isFavorite
-                                    Label(isFav ? "Remove from Favorites" : "Add to Favorites", systemImage: isFav ? "heart.fill" : "heart")
-                                }
-                                
-                                Divider()
-                                
-                                Menu("Add to Playlist") {
-                                    Button("New Playlist...") {
-                                        trackToAdd = track
-                                        newPlaylistName = ""
-                                        showNewPlaylistAlert = true
-                                    }
-                                    
-                                    Divider()
-                                    
-                                    ForEach(state.playlists) { playlist in
-                                        Button(playlist.name) {
-                                            state.addTrackToPlaylist(track: track, playlistId: playlist.id)
-                                        }
-                                    }
-                                }
-                                
-                                Divider()
-                                
-                                Button("Show in Finder") {
-                                    if let url = track.fileURL {
-                                        NSWorkspace.shared.activateFileViewerSelecting([url])
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundColor(state.theme.textSecondary)
-                                    .contentShape(Rectangle())
-                            }
-                            .menuStyle(.borderlessButton)
-                            .frame(width: 24)
-                        }
-                    }
-                    
-                    Button(action: {
-                        if let track = engine.currentTrack {
-                            state.selectedTab = "artists"
-                            state.activeFilterType = "artist"
-                            state.activeFilterValue = track.artist
-                            showFullscreen = false
-                        }
-                    }) {
-                        Text(engine.currentTrack?.artist ?? "---")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(isHoveringArtist ? state.theme.accent : state.theme.textSecondary.opacity(0.85))
-                            .lineLimit(1)
-                            .underline(isHoveringArtist)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .onHover { isHoveringArtist = $0 }
-                }
-            }
-            .frame(width: 320, alignment: .leading)
-            
-            Spacer(minLength: 16)
-            
-            // 2. Timeline progress Scrubber (Center Aligned, fills available workspace)
-            VStack(spacing: 4) {
-                HStack {
-                    Text(formatTime(timeTracker.currentTime))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(state.theme.textSecondary)
-                    
-                    Spacer()
-                    
-                    if let track = engine.currentTrack {
-                        AudioQualityTagsView(track: track, theme: state.theme)
-                    }
-                    
-                    Spacer()
-                    
-                    Text("-" + formatTime(max(0, engine.duration - timeTracker.currentTime)))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(state.theme.textSecondary)
-                }
-                
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(state.theme.textSecondary.opacity(0.3))
-                            .frame(height: 6)
-                        
-                        Capsule()
-                            .fill(state.theme.textPrimary)
-                            .frame(width: geo.size.width * CGFloat(timeTracker.currentTime / max(0.1, engine.duration)), height: 6)
-                    }
-                    .frame(height: 14)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                let percent = min(max(value.location.x / geo.size.width, 0), 1)
-                                engine.seek(to: Double(percent) * engine.duration)
-                            }
-                    )
-                }
-                .frame(height: 14)
-            }
-            
-            Spacer(minLength: 24)
-            
-            // 3. Mechanical Prev / Play / Next Buttons (150% bigger, aligned to the right of the timeline)
-            HStack(spacing: 18) {
-                Button(action: {
-                    engine.triggerHaptic(pattern: .alignment)
-                    state.playPrevious(engine: engine)
-                }) {
-                    Image(systemName: "backward.fill")
-                        .font(.title2)
-                        .foregroundColor(state.theme.textPrimary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-                
-                Button(action: {
-                    engine.triggerHaptic(pattern: .generic)
-                    engine.togglePlayPause()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(state.theme.accent)
-                            .frame(width: 48, height: 48) // 150% of 32
-                            .shadow(color: Color.black.opacity(0.15), radius: 4)
-                        Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 17, weight: .bold)) // 150% of 11
-                            .foregroundColor(.white)
-                            .offset(x: engine.isPlaying ? 0 : 2)
-                    }
-                }
-                .buttonStyle(PremiumButtonStyle())
-                
-                Button(action: {
-                    engine.triggerHaptic(pattern: .alignment)
-                    state.playNext(engine: engine)
-                }) {
-                    Image(systemName: "forward.fill")
-                        .font(.title2)
-                        .foregroundColor(state.theme.textPrimary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-            }
-            .padding(.horizontal, 10)
-            
-            Spacer()
-            
-            // 4. Sound System Volume Slider & Action Panel triggers (Far Right)
-            HStack(spacing: 12) {
-                HStack(spacing: 6) {
-                    Image(systemName: "speaker.fill")
-                        .foregroundColor(state.theme.textSecondary)
-                    Slider(value: $engine.volume, in: 0...1)
-                        .accentColor(state.theme.accent)
-                        .frame(width: 80)
-                    Image(systemName: "speaker.wave.3.fill")
-                        .foregroundColor(state.theme.textSecondary)
-                }
-                .controlSize(.small)
-                
-                Divider()
-                    .frame(height: 16)
-                    .background(state.theme.textSecondary.opacity(0.3))
-                
-                Button(action: {
-                    state.toggleShuffle(currentTrack: engine.currentTrack)
-                }) {
-                    Image(systemName: "shuffle")
-                        .font(.body)
-                        .foregroundColor(state.isQueueShuffled ? state.theme.accent : state.theme.textSecondary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-                .help("Shuffle")
-                
-                Button(action: {
-                    state.repeatMode = (state.repeatMode + 1) % 3
-                }) {
-                    Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat")
-                        .font(.body)
-                        .foregroundColor(state.repeatMode > 0 ? state.theme.accent : state.theme.textSecondary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-                .help(state.repeatMode == 2 ? "Repeat One" : (state.repeatMode == 1 ? "Repeat All" : "Repeat Off"))
-                
-                let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
-                Button(action: {
-                    if hasLyrics {
-                        state.activeRightSidebar = state.activeRightSidebar == .lyrics ? .none : .lyrics
-                    }
-                }) {
-                    Image(systemName: "quote.bubble")
-                        .font(.body)
-                        .foregroundColor(!hasLyrics ? state.theme.textSecondary.opacity(0.3) : (state.activeRightSidebar == .lyrics ? state.theme.accent : state.theme.textSecondary))
-                }
-                .buttonStyle(PremiumButtonStyle())
-                .disabled(!hasLyrics)
-                .help(hasLyrics ? "Synced Lyrics" : "No Lyrics Available")
-                
-                Button(action: {
-                    state.activeRightSidebar = state.activeRightSidebar == .queue ? .none : .queue
-                }) {
-                    Image(systemName: "list.bullet.rectangle.portrait")
-                        .font(.body)
-                        .foregroundColor(state.activeRightSidebar == .queue ? state.theme.accent : state.theme.textSecondary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-                .help("Playing Next")
-                
-                Button(action: {
-                    state.activeRightSidebar = state.activeRightSidebar == .output ? .none : .output
-                }) {
-                    Image(systemName: "airplayaudio")
-                        .font(.body)
-                        .foregroundColor(state.activeRightSidebar == .output ? state.theme.accent : state.theme.textSecondary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-                .help("Audio Output Device")
-                
-                if #available(macOS 13.0, *) {
-                    Button(action: {
-                        openWindow(id: "miniPlayer")
-                    }) {
-                        Image(systemName: "macwindow.badge.plus")
-                            .font(.body)
-                            .foregroundColor(state.theme.textSecondary)
-                    }
-                    .buttonStyle(PremiumButtonStyle())
-                    .help("Open Mini Player")
-                }
+    @State private var hoveringArt = false
 
-                Button(action: {
-                    NSApp.keyWindow?.makeFirstResponder(nil)
-                    showFullscreen.toggle()
-                }) {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.body)
-                        .foregroundColor(state.theme.textSecondary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-                .help("Vision Mode Fullscreen")
-                
-                Button(action: { showSettings.toggle() }) {
-                    Image(systemName: "gearshape")
-                        .font(.body)
-                        .foregroundColor(state.theme.textSecondary)
-                }
-                .buttonStyle(PremiumButtonStyle())
-                .help("Preferences")
+    var body: some View {
+        let theme = state.theme
+        HStack(spacing: 20) {
+            nowPlaying(theme)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(spacing: 4) {
+                transport(theme)
+                PlaybackScrubber(engine: engine, timeTracker: timeTracker, theme: theme)
+            }
+            .frame(width: 440)
+
+            utilities(theme)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 82)
+        .background {
+            ZStack {
+                Rectangle().fill(.bar)
+                theme.barBackground
             }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 16)
-        .padding(.leading, 24)
-        .padding(.trailing, 24)
-        .background(state.theme.sidebarBackground.opacity(0.95))
-        .alert("New Playlist", isPresented: $showNewPlaylistAlert, actions: {
+        .overlay(alignment: .top) {
+            Rectangle().fill(theme.hairline).frame(height: 1)
+        }
+        .alert("New Playlist", isPresented: $showNewPlaylistAlert) {
             TextField("Playlist Name", text: $newPlaylistName)
-            Button("Create", action: {
-                if !newPlaylistName.isEmpty {
-                    state.createNewPlaylist(name: newPlaylistName, initialTrack: trackToAdd)
+            Button("Create") {
+                if !newPlaylistName.isEmpty, let track = engine.currentTrack {
+                    state.createNewPlaylist(name: newPlaylistName, initialTrack: track)
                 }
-            })
-            Button("Cancel", role: .cancel, action: {})
-        }, message: {
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
             Text("Enter a name for the new playlist.")
-        })
+        }
     }
-    
-    private func formatTime(_ sec: TimeInterval) -> String {
-        let m = Int(sec) / 60
-        let s = Int(sec) % 60
-        return String(format: "%d:%02d", m, s)
+
+    // MARK: Left — artwork & metadata
+
+    private func nowPlaying(_ theme: ThemeColor) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                if engine.currentTrack != nil {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    showFullscreen = true
+                }
+            } label: {
+                ZStack {
+                    if let track = engine.currentTrack {
+                        ArtworkView(track: track, pixelSize: 120, cornerRadius: 7)
+                    } else {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(theme.cardBackground)
+                            .overlay(Image(systemName: "music.note").foregroundStyle(theme.textTertiary))
+                    }
+                    if hoveringArt && engine.currentTrack != nil {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(.black.opacity(0.45))
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 54, height: 54)
+                .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveringArt = $0 }
+            .help("Open Now Playing")
+
+            VStack(alignment: .leading, spacing: 3) {
+                if let track = engine.currentTrack {
+                    LinkText(text: track.title, font: .system(size: 13, weight: .semibold), color: theme.textPrimary, hoverColor: theme.textPrimary) {
+                        state.showAlbum(track.album)
+                    }
+                    LinkText(text: track.artist, font: .system(size: 12), color: theme.textSecondary, hoverColor: theme.accent) {
+                        state.showArtist(track.artist)
+                    }
+                } else {
+                    Text("Not Playing")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                    Text("Pick something to play")
+                        .lineLimit(1)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.textTertiary)
+                }
+            }
+            .frame(minWidth: 60, alignment: .leading)
+
+            if let track = engine.currentTrack {
+                let isFav = state.isFavorite(track.id)
+                Button {
+                    state.toggleFavorite(track: track)
+                } label: {
+                    Image(systemName: isFav ? "heart.fill" : "heart")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(IconButtonStyle(theme: theme, isActive: isFav, size: 28))
+                .help(isFav ? "Remove from Favorites" : "Add to Favorites")
+
+                Menu {
+                    Button("Go to Album") { state.showAlbum(track.album) }
+                    Button("Go to Artist") { state.showArtist(track.artist) }
+                    Divider()
+                    Menu("Add to Playlist") {
+                        Button("New Playlist…") {
+                            newPlaylistName = ""
+                            showNewPlaylistAlert = true
+                        }
+                        Divider()
+                        ForEach(state.playlists) { playlist in
+                            Button(playlist.name) { state.addTrackToPlaylist(track: track, playlistId: playlist.id) }
+                        }
+                    }
+                    Divider()
+                    Button("Show in Finder") {
+                        if let url = track.fileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                    }
+                    Button("Open Mini Player") { openWindow(id: "miniPlayer") }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
+        }
+    }
+
+    // MARK: Center — transport
+
+    private func transport(_ theme: ThemeColor) -> some View {
+        HStack(spacing: 18) {
+            Button {
+                state.toggleShuffle(currentTrack: engine.currentTrack)
+            } label: {
+                Image(systemName: "shuffle").font(.system(size: 13, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(theme: theme, isActive: state.isQueueShuffled, size: 28))
+            .help("Shuffle")
+
+            Button {
+                engine.triggerHaptic(pattern: .alignment)
+                state.playPrevious(engine: engine)
+            } label: {
+                Image(systemName: "backward.fill").font(.system(size: 17))
+            }
+            .buttonStyle(IconButtonStyle(theme: theme, size: 32))
+            .disabled(engine.currentTrack == nil)
+
+            Button {
+                engine.triggerHaptic(pattern: .generic)
+                engine.togglePlayPause()
+            } label: {
+                Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(theme.background)
+                    .offset(x: engine.isPlaying ? 0 : 1.5)
+                    .frame(width: 36, height: 36)
+                    .background(theme.textPrimary, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(engine.currentTrack == nil)
+            .help(engine.isPlaying ? "Pause" : "Play")
+
+            Button {
+                engine.triggerHaptic(pattern: .alignment)
+                state.playNext(engine: engine)
+            } label: {
+                Image(systemName: "forward.fill").font(.system(size: 17))
+            }
+            .buttonStyle(IconButtonStyle(theme: theme, size: 32))
+            .disabled(engine.currentTrack == nil)
+
+            Button {
+                state.repeatMode = (state.repeatMode + 1) % 3
+            } label: {
+                Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat").font(.system(size: 13, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(theme: theme, isActive: state.repeatMode > 0, size: 28))
+            .help(state.repeatMode == 2 ? "Repeat One" : (state.repeatMode == 1 ? "Repeat All" : "Repeat Off"))
+        }
+    }
+
+    // MARK: Right — panels & volume
+
+    private func utilities(_ theme: ThemeColor) -> some View {
+        HStack(spacing: 4) {
+            let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
+            panelButton(.lyrics, icon: "quote.bubble", help: hasLyrics ? "Lyrics" : "No Lyrics Available", theme: theme)
+                .disabled(!hasLyrics && state.activeRightSidebar != .lyrics)
+            panelButton(.queue, icon: "list.bullet", help: "Playing Next", theme: theme)
+            panelButton(.output, icon: "airplayaudio", help: "Audio Output", theme: theme)
+
+            VolumeControl(engine: engine, theme: theme)
+                .padding(.leading, 6)
+
+            Button {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                showFullscreen = true
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(theme: theme, size: 28))
+            .disabled(engine.currentTrack == nil)
+            .help("Full Screen Player")
+        }
+    }
+
+    private func panelButton(_ panel: AppStateManager.RightSidebarPanel, icon: String, help: String, theme: ThemeColor) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                state.activeRightSidebar = state.activeRightSidebar == panel ? .none : panel
+            }
+        } label: {
+            Image(systemName: icon).font(.system(size: 13, weight: .semibold))
+        }
+        .buttonStyle(IconButtonStyle(theme: theme, isActive: state.activeRightSidebar == panel, size: 28))
+        .help(help)
+    }
+}
+
+/// Plain press feedback for custom-drawn buttons.
+struct PressableStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+/// Single-line text that underlines on hover and acts as a link.
+struct LinkText: View {
+    let text: String
+    let font: Font
+    let color: Color
+    let hoverColor: Color
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(text)
+                .font(font)
+                .foregroundStyle(hovering ? hoverColor : color)
+                .underline(hovering)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+struct VolumeControl: View {
+    @ObservedObject var engine: AudioEngineManager
+    let theme: ThemeColor
+    @State private var lastNonZero: Float = 0.8
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button {
+                if engine.volume > 0 {
+                    lastNonZero = engine.volume
+                    engine.volume = 0
+                } else {
+                    engine.volume = lastNonZero
+                }
+            } label: {
+                Image(systemName: icon).font(.system(size: 12, weight: .semibold)).frame(width: 16)
+            }
+            .buttonStyle(IconButtonStyle(theme: theme, size: 26))
+            .help(engine.volume == 0 ? "Unmute" : "Mute")
+
+            ThinSlider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), theme: theme)
+                .frame(width: 72, height: 16)
+        }
+    }
+
+    private var icon: String {
+        switch engine.volume {
+        case 0: return "speaker.slash.fill"
+        case ..<0.34: return "speaker.wave.1.fill"
+        case ..<0.67: return "speaker.wave.2.fill"
+        default: return "speaker.wave.3.fill"
+        }
+    }
+}
+
+/// Minimal capsule slider that thickens on hover (used for volume).
+struct ThinSlider: View {
+    @Binding var value: Double
+    let theme: ThemeColor
+    @State private var hovering = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let fraction = CGFloat(min(max(value, 0), 1))
+            ZStack(alignment: .leading) {
+                Capsule().fill(theme.textPrimary.opacity(0.18))
+                Capsule().fill(hovering ? theme.accent : theme.textPrimary.opacity(0.75))
+                    .frame(width: max(0, geo.size.width * fraction))
+            }
+            .frame(height: hovering ? 5 : 3)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { g in
+                value = Double(min(max(g.location.x / max(geo.size.width, 1), 0), 1))
+            })
+        }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Timeline with elapsed / remaining labels. Observes the time tracker on its own.
+struct PlaybackScrubber: View {
+    @ObservedObject var engine: AudioEngineManager
+    @ObservedObject var timeTracker: AudioTimeTracker
+    let theme: ThemeColor
+    var style: Style = .bar
+
+    enum Style { case bar, fullscreen }
+
+    @State private var dragFraction: Double?
+    @State private var hovering = false
+
+    var body: some View {
+        let duration = max(0.1, engine.duration)
+        let fraction = dragFraction ?? min(max(timeTracker.currentTime / duration, 0), 1)
+        let shownTime = dragFraction.map { $0 * duration } ?? timeTracker.currentTime
+        let labelColor = style == .fullscreen ? Color.white.opacity(0.6) : theme.textTertiary
+        let track = style == .fullscreen ? Color.white.opacity(0.22) : theme.textPrimary.opacity(0.16)
+        let fill = style == .fullscreen ? Color.white : (hovering || dragFraction != nil ? theme.accent : theme.textPrimary.opacity(0.7))
+
+        HStack(spacing: 10) {
+            Text(Fmt.time(shownTime))
+                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                .foregroundStyle(labelColor)
+                .frame(width: 38, alignment: .trailing)
+
+            GeometryReader { geo in
+                let active = hovering || dragFraction != nil
+                ZStack(alignment: .leading) {
+                    Capsule().fill(track)
+                    Capsule().fill(fill).frame(width: max(0, geo.size.width * fraction))
+                }
+                .frame(height: active ? 6 : 4)
+                .overlay(alignment: .leading) {
+                    if active {
+                        Circle()
+                            .fill(style == .fullscreen ? Color.white : theme.textPrimary)
+                            .frame(width: 12, height: 12)
+                            .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                            .offset(x: geo.size.width * fraction - 6)
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { g in dragFraction = min(max(g.location.x / max(geo.size.width, 1), 0), 1) }
+                        .onEnded { g in
+                            let f = min(max(g.location.x / max(geo.size.width, 1), 0), 1)
+                            engine.seek(to: f * engine.duration)
+                            dragFraction = nil
+                        }
+                )
+            }
+            .frame(height: 14)
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            .onHover { hovering = $0 }
+            .disabled(engine.currentTrack == nil)
+
+            Text("-" + Fmt.time(max(0, duration - shownTime)))
+                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                .foregroundStyle(labelColor)
+                .frame(width: 42, alignment: .leading)
+        }
     }
 }
 
@@ -364,7 +421,6 @@ struct PlayerControlsView: View {
 //  Created for Xcode Native Compile on 2026-06-14.
 //  SPDX-License-Identifier: Apache-2.0
 //
-
 
 extension Color {
     init?(hex: String) {
@@ -394,7 +450,7 @@ extension Color {
 struct VisualEffectView: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .underWindowBackground
     var blendingMode: NSVisualEffectView.BlendingMode = .withinWindow
-    
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.material = material
@@ -403,66 +459,51 @@ struct VisualEffectView: NSViewRepresentable {
         view.appearance = NSAppearance(named: .darkAqua)
         return view
     }
-    
+
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
         nsView.blendingMode = blendingMode
     }
 }
 
+/// Slowly drifting blurred color blobs behind the full screen player.
 struct FluidBackgroundView: View {
     let isIdle: Bool
     var colors: [Color]
-    @State private var phase1 = false
-    @State private var phase2 = false
-    @State private var phase3 = false
+    @State private var phase = false
 
     var body: some View {
         GeometryReader { geo in
+            let size = geo.size
             ZStack {
                 if colors.count >= 4 {
-                    // Base background
                     colors[3]
-                        .edgesIgnoringSafeArea(.all)
-                    
-                    // Blob 1
                     Ellipse()
                         .fill(colors[0])
-                        .frame(width: geo.size.width * 1.0, height: geo.size.height * 1.0)
-                        .scaleEffect(phase1 && !isIdle ? 1.2 : 0.8)
-                        .offset(x: phase1 && !isIdle ? geo.size.width * 0.1 : -geo.size.width * 0.1,
-                                y: phase1 && !isIdle ? geo.size.height * 0.1 : -geo.size.height * 0.1)
-                        .rotationEffect(.degrees(phase1 && !isIdle ? 90 : 0))
-                        .animation(isIdle ? .none : .easeInOut(duration: 15).repeatForever(autoreverses: true), value: phase1)
-                        .onAppear { phase1.toggle() }
-                    
-                    // Blob 2
+                        .frame(width: size.width, height: size.height)
+                        .scaleEffect(phase ? 1.2 : 0.8)
+                        .offset(x: phase ? size.width * 0.1 : -size.width * 0.1, y: phase ? size.height * 0.1 : -size.height * 0.1)
+                        .rotationEffect(.degrees(phase ? 90 : 0))
                     Ellipse()
                         .fill(colors[1])
-                        .frame(width: geo.size.width * 1.1, height: geo.size.height * 0.9)
-                        .scaleEffect(phase2 && !isIdle ? 1.3 : 0.9)
-                        .offset(x: phase2 && !isIdle ? -geo.size.width * 0.2 : geo.size.width * 0.2,
-                                y: phase2 && !isIdle ? geo.size.height * 0.2 : -geo.size.height * 0.1)
-                        .rotationEffect(.degrees(phase2 && !isIdle ? -60 : 60))
-                        .animation(isIdle ? .none : .easeInOut(duration: 18).repeatForever(autoreverses: true), value: phase2)
-                        .onAppear { phase2.toggle() }
-                    
-                    // Blob 3
+                        .frame(width: size.width * 1.1, height: size.height * 0.9)
+                        .scaleEffect(phase ? 1.3 : 0.9)
+                        .offset(x: phase ? -size.width * 0.2 : size.width * 0.2, y: phase ? size.height * 0.2 : -size.height * 0.1)
+                        .rotationEffect(.degrees(phase ? -60 : 60))
                     Ellipse()
                         .fill(colors[2])
-                        .frame(width: geo.size.width * 0.9, height: geo.size.height * 1.1)
-                        .scaleEffect(phase3 && !isIdle ? 0.9 : 1.4)
-                        .offset(x: phase3 && !isIdle ? -geo.size.width * 0.15 : geo.size.width * 0.15,
-                                y: phase3 && !isIdle ? -geo.size.height * 0.2 : geo.size.height * 0.2)
-                        .rotationEffect(.degrees(phase3 && !isIdle ? 120 : -30))
-                        .animation(isIdle ? .none : .easeInOut(duration: 22).repeatForever(autoreverses: true), value: phase3)
-                        .onAppear { phase3.toggle() }
+                        .frame(width: size.width * 0.9, height: size.height * 1.1)
+                        .scaleEffect(phase ? 0.9 : 1.4)
+                        .offset(x: phase ? -size.width * 0.15 : size.width * 0.15, y: phase ? -size.height * 0.2 : size.height * 0.2)
+                        .rotationEffect(.degrees(phase ? 120 : -30))
                 }
             }
             .scaleEffect(1.15)
             .blur(radius: 90, opaque: true)
             .clipped()
-            .ignoresSafeArea(.all)
+            .animation(isIdle ? .easeOut(duration: 2) : .easeInOut(duration: 18).repeatForever(autoreverses: true), value: phase)
+            .onAppear { phase = !isIdle }
+            .onChange(of: isIdle) { _, idle in phase = !idle }
         }
         .ignoresSafeArea(.all)
     }
@@ -471,29 +512,21 @@ struct FluidBackgroundView: View {
 struct FullLyricsView: View {
     @ObservedObject var state: AppStateManager
     @ObservedObject var engine: AudioEngineManager
-    @ObservedObject var timeTracker: AudioTimeTracker
+    let timeTracker: AudioTimeTracker
     @Binding var isPresented: Bool
-    
+
     enum FullLyricsRightPanel {
         case lyrics, queue, output, none
     }
     @State private var rightPanel: FullLyricsRightPanel = .lyrics
-    @State private var isAnimating: Bool = false
-    @State private var isFavorite: Bool = false
-    @State private var isShuffleActive: Bool = false
-    @State private var isRepeatActive: Bool = false
-    
+
     @State private var showNewPlaylistAlert = false
     @State private var newPlaylistName = ""
-    @State private var trackToAdd: LocalTrack?
-    @State private var activeLineId: UUID? = nil
     @State private var cachedColors: [Color] = []
-    
-    @State private var isHoveringArt = false
-    @State private var isHoveringArtist = false
-    
+    @State private var hoveringArt = false
+
     @AppStorage("enableDynamicBackground") private var enableDynamicBackground = true
-    
+
     private var activeBackgroundColors: [Color] {
         if !enableDynamicBackground || cachedColors.isEmpty {
             return [
@@ -505,658 +538,439 @@ struct FullLyricsView: View {
         }
         return cachedColors
     }
-    
+
     private func updateCachedColors() {
-        if let track = engine.currentTrack {
-            if let colorsHex = track.artworkColors, colorsHex.count >= 4 {
-                let extracted = colorsHex.compactMap { Color(hex: $0) }
-                if extracted.count >= 4 {
-                    withAnimation(.easeInOut(duration: 1.2)) {
-                        self.cachedColors = extracted
-                    }
-                    return
-                }
-            }
-            
-            var nsImage: NSImage? = nil
-            if let artData = track.embeddedArtData, let img = NSImage(data: artData) {
-                nsImage = img
-            } else if let imageURL = track.localCoverURL, let img = NSImage(contentsOf: imageURL) {
-                nsImage = img
-            }
-            
-            extractDominantColors(from: nsImage, fallback: state.theme.accent) { colors in
-                let hexes = colors.map { $0.toHex() ?? "#1A1A1A" }
-                
-                DispatchQueue.main.async {
-                    if let idx = state.tracks.firstIndex(where: { $0.id == track.id }) {
-                        state.tracks[idx].artworkColors = hexes
-                        engine.currentTrack?.artworkColors = hexes
-                    }
-                    withAnimation(.easeInOut(duration: 1.2)) {
-                        self.cachedColors = colors
-                    }
-                }
-            }
-        } else {
+        guard let track = engine.currentTrack else {
             withAnimation(.easeInOut(duration: 1.2)) {
-                cachedColors = generateComplementaryColors(from: state.theme.accent)
+                cachedColors = [state.theme.accent.opacity(0.8), state.theme.accent.opacity(0.6), state.theme.accent.opacity(0.4), state.theme.accent.opacity(0.2)]
+            }
+            return
+        }
+        if let colorsHex = track.artworkColors, colorsHex.count >= 4 {
+            let extracted = colorsHex.compactMap { Color(hex: $0) }
+            if extracted.count >= 4 {
+                withAnimation(.easeInOut(duration: 1.2)) { cachedColors = extracted }
+                return
+            }
+        }
+
+        Task {
+            let image = await ArtworkStore.shared.image(for: track, pixelSize: 128)
+            let colors = await Task.detached(priority: .userInitiated) { Self.extractDominantColors(from: image) }.value
+            let hexes = colors.map { $0.toHex() ?? "#1A1A1A" }
+            if let idx = state.tracks.firstIndex(where: { $0.id == track.id }) {
+                state.tracks[idx].artworkColors = hexes
+            }
+            if engine.currentTrack?.id == track.id {
+                engine.currentTrack?.artworkColors = hexes
+                withAnimation(.easeInOut(duration: 1.2)) { cachedColors = colors }
             }
         }
     }
-    
-    private func extractDominantColors(from image: NSImage?, fallback: Color, completion: @escaping ([Color]) -> Void) {
+
+    nonisolated private static func extractDominantColors(from image: NSImage?) -> [Color] {
         let defaultPalette = [
             Color(red: 0.15, green: 0.15, blue: 0.15),
             Color(red: 0.1, green: 0.1, blue: 0.1),
             Color(red: 0.05, green: 0.05, blue: 0.05),
             Color(red: 0.02, green: 0.02, blue: 0.02)
         ]
-        
-        guard let image = image,
-              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            DispatchQueue.global(qos: .userInitiated).async { completion(defaultPalette) }
-            return
+        guard let image, let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return defaultPalette
         }
-        
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ciImage = CIImage(cgImage: cgImage)
-            let w = ciImage.extent.size.width
-            let h = ciImage.extent.size.height
-            
-            let tl = CIVector(x: 0, y: h/2, z: w/2, w: h/2)
-            let tr = CIVector(x: w/2, y: h/2, z: w/2, w: h/2)
-            let bl = CIVector(x: 0, y: 0, z: w/2, w: h/2)
-            let br = CIVector(x: w/2, y: 0, z: w/2, w: h/2)
-            
-            var colors: [Color] = []
-            let context = CIContext(options: [.workingColorSpace: CGColorSpaceCreateDeviceRGB()])
-            
-            for extent in [tl, tr, bl, br] {
-                if let avgFilter = CIFilter(name: "CIAreaAverage", parameters: [kCIInputImageKey: ciImage, kCIInputExtentKey: extent]),
-                   let avgOutput = avgFilter.outputImage {
-                    var bitmap = [UInt8](repeating: 0, count: 4)
-                    context.render(avgOutput, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
-                    
-                    let r = CGFloat(bitmap[0]) / 255.0
-                    let g = CGFloat(bitmap[1]) / 255.0
-                    let b = CGFloat(bitmap[2]) / 255.0
-                    
-                    let dominantColor = Color(red: Double(r), green: Double(g), blue: Double(b))
-                    colors.append(dominantColor)
-                }
-            }
-            
-            if colors.isEmpty {
-                completion(defaultPalette)
-            } else {
-                while colors.count < 4 { colors.append(colors.last!) }
-                completion(colors)
+
+        let ciImage = CIImage(cgImage: cgImage)
+        let w = ciImage.extent.size.width
+        let h = ciImage.extent.size.height
+        let quadrants = [
+            CIVector(x: 0, y: h / 2, z: w / 2, w: h / 2),
+            CIVector(x: w / 2, y: h / 2, z: w / 2, w: h / 2),
+            CIVector(x: 0, y: 0, z: w / 2, w: h / 2),
+            CIVector(x: w / 2, y: 0, z: w / 2, w: h / 2)
+        ]
+
+        var colors: [Color] = []
+        let context = CIContext(options: [.workingColorSpace: CGColorSpaceCreateDeviceRGB()])
+        for extent in quadrants {
+            if let avgFilter = CIFilter(name: "CIAreaAverage", parameters: [kCIInputImageKey: ciImage, kCIInputExtentKey: extent]),
+               let avgOutput = avgFilter.outputImage {
+                var bitmap = [UInt8](repeating: 0, count: 4)
+                context.render(avgOutput, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+                colors.append(Color(red: Double(bitmap[0]) / 255.0, green: Double(bitmap[1]) / 255.0, blue: Double(bitmap[2]) / 255.0))
             }
         }
+        if colors.isEmpty { return defaultPalette }
+        while colors.count < 4 { colors.append(colors.last!) }
+        return colors
     }
-    
-    private func generateComplementaryColors(from baseColor: Color) -> [Color] {
-        return [baseColor.opacity(0.8), baseColor.opacity(0.6), baseColor.opacity(0.4), baseColor.opacity(0.2)]
-    }
-    
+
     var body: some View {
+        let theme = state.theme
+        let effectiveRightPanel = (rightPanel == .lyrics && engine.parsedLyrics.isEmpty) ? .none : rightPanel
+
         ZStack {
-            // Liquid Glass Background
-            ZStack {
-                FluidBackgroundView(isIdle: state.isIdle, colors: activeBackgroundColors)
-                    .animation(.easeInOut(duration: 1.2), value: activeBackgroundColors)
-                
-                VisualEffectView(material: .underWindowBackground, blendingMode: .withinWindow)
-                    .ignoresSafeArea(.all)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea(.all)
-            
+            FluidBackgroundView(isIdle: state.isIdle, colors: activeBackgroundColors)
+                .animation(.easeInOut(duration: 1.2), value: activeBackgroundColors)
+                .overlay(Color.black.opacity(0.28))
+                .ignoresSafeArea()
+
             VStack(spacing: 0) {
-                
-                // Primary body split: Album details (left) & lyrics list (right)
+                topBar(effectiveRightPanel)
+
                 HStack(spacing: 64) {
-                    let effectiveRightPanel = (rightPanel == .lyrics && engine.parsedLyrics.isEmpty) ? .none : rightPanel
-                    
+                    if effectiveRightPanel == .none { Spacer(minLength: 0) }
+
+                    playerColumn(theme)
+
                     if effectiveRightPanel == .none {
-                        Spacer()
+                        Spacer(minLength: 0)
+                    } else {
+                        Group {
+                            switch effectiveRightPanel {
+                            case .lyrics:
+                                FullLyricsList(engine: engine, timeTracker: timeTracker)
+                                    .frame(maxWidth: 560)
+                            case .queue:
+                                QueueSidebarView(state: state, engine: engine, isFullscreen: true)
+                                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    .padding(.vertical, 24)
+                            case .output:
+                                OutputDeviceSidebarView(state: state, engine: engine, isFullscreen: true)
+                                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    .padding(.vertical, 24)
+                            case .none:
+                                EmptyView()
+                            }
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
                     }
-                    
-                    // LEFT COLUMN: Huge cover art, track metadata & embedded player
-                    VStack(spacing: 32) {
-                        Button(action: {
-                            if let track = engine.currentTrack {
-                                state.selectedTab = "albums"
-                                state.activeFilterType = "album"
-                                state.activeFilterValue = track.album
-                                isPresented = false
-                            }
-                        }) {
-                            ZStack {
-                                if let primaryColor = cachedColors.first {
-                                    RoundedRectangle(cornerRadius: 24)
-                                        .fill(primaryColor)
-                                        .frame(width: 380, height: 380)
-                                        .blur(radius: 60)
-                                        .opacity(0.65)
-                                        .animation(.easeOut(duration: 0.8), value: primaryColor)
-                                }
-                                
-                                if let track = engine.currentTrack {
-                                    AsyncFlexibleThumbnailView(track: track, maxPixelSize: 760, theme: state.theme, cornerRadius: 24)
-                                        .frame(width: 380, height: 380)
-                                }
-                            }
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .scaleEffect(engine.isPlaying ? (isHoveringArt ? 1.02 : 1.0) : 0.85)
-                        .shadow(color: cachedColors.first?.opacity(engine.isPlaying ? 0.6 : 0.2) ?? Color.black.opacity(engine.isPlaying ? 0.5 : 0.2), radius: engine.isPlaying ? 40 : 15, x: 0, y: engine.isPlaying ? 20 : 5)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.75, blendDuration: 0), value: engine.isPlaying)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHoveringArt)
-                        .onHover { isHoveringArt = $0 }
-                        
-                        // Text descriptions and action row matching the reference layout
-                        HStack(alignment: .center) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(engine.currentTrack?.title ?? "Not Playing")
-                                        .font(.system(size: 24, weight: .black, design: .rounded))
-                                        .foregroundColor(.white)
-                                        .lineLimit(1)
-                                    
-                                    Button(action: {
-                                        if let track = engine.currentTrack {
-                                            state.selectedTab = "artists"
-                                            state.activeFilterType = "artist"
-                                            state.activeFilterValue = track.artist
-                                            isPresented = false
-                                        }
-                                    }) {
-                                        Text("\(engine.currentTrack?.artist ?? "---") — \(engine.currentTrack?.album ?? "---")")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundColor(isHoveringArtist ? .white : .white.opacity(0.6))
-                                            .lineLimit(1)
-                                            .underline(isHoveringArtist)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                    .onHover { isHoveringArtist = $0 }
-                                }
-                                
-                                Spacer()
-                                
-                                // Elegant transparent circle option triggers
-                                HStack(spacing: 12) {
-                                    Button(action: {
-                                        isFavorite.toggle()
-                                        if let currentTrack = engine.currentTrack {
-                                            state.toggleFavorite(track: currentTrack)
-                                        }
-                                    }) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.white.opacity(0.06))
-                                                .frame(width: 40, height: 40)
-                                                .overlay(
-                                                    Circle()
-                                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                                                )
-                                            
-                                            Image(systemName: isFavorite ? "heart.fill" : "heart")
-                                                .font(.system(size: 15))
-                                                .foregroundColor(.white)
-                                        }
-                                    }
-                                    .buttonStyle(PremiumButtonStyle())
-                                    
-                                    Menu {
-                                        if let track = engine.currentTrack {
-                                            Button("Play") {
-                                                engine.playTrack(track)
-                                            }
-                                            
-                                            Divider()
-                                            
-                                            Button(action: {
-                                                state.toggleFavorite(track: track)
-                                                isFavorite = track.isFavorite
-                                            }) {
-                                                Label(isFavorite ? "Remove from Favorites" : "Add to Favorites", systemImage: isFavorite ? "heart.fill" : "heart")
-                                            }
-                                            
-                                            Divider()
-                                            
-                                            Menu("Add to Playlist") {
-                                                Button("New Playlist...") {
-                                                    trackToAdd = track
-                                                    newPlaylistName = ""
-                                                    showNewPlaylistAlert = true
-                                                }
-                                                
-                                                Divider()
-                                                
-                                                ForEach(state.playlists) { playlist in
-                                                    Button(playlist.name) {
-                                                        state.addTrackToPlaylist(track: track, playlistId: playlist.id)
-                                                    }
-                                                }
-                                            }
-                                            
-                                            Divider()
-                                            
-                                            Button("Show in Finder") {
-                                                if let url = track.fileURL {
-                                                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                                                }
-                                            }
-                                        }
-                                    } label: {
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.white.opacity(0.06))
-                                                .frame(width: 40, height: 40)
-                                                .overlay(
-                                                    Circle()
-                                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                                                )
-                                            
-                                            Image(systemName: "ellipsis")
-                                                .font(.system(size: 15))
-                                                .foregroundColor(.white)
-                                        }
-                                    }
-                                    .menuStyle(.borderlessButton)
-                                    .frame(width: 40, height: 40)
-                                    .buttonStyle(PremiumButtonStyle())
-                                }
-                            }
-                            .frame(width: 420)
-                            
-                            // Draggable Progress timeline & centring Dolby Atmos underneath
-                            VStack(spacing: 12) {
-                                GeometryReader { geo in
-                                    ZStack(alignment: .leading) {
-                                        Capsule()
-                                            .fill(Color.white.opacity(0.3))
-                                            .frame(height: 6)
-                                        
-                                        Capsule()
-                                            .fill(Color.white)
-                                            .frame(width: geo.size.width * CGFloat(timeTracker.currentTime / max(0.1, engine.duration)), height: 6)
-                                    }
-                                    .frame(height: 14)
-                                    .contentShape(Rectangle())
-                                    .gesture(
-                                        DragGesture(minimumDistance: 0)
-                                            .onChanged { value in
-                                                let percent = min(max(value.location.x / geo.size.width, 0), 1)
-                                                engine.seek(to: Double(percent) * engine.duration)
-                                            }
-                                    )
-                                }
-                                .frame(height: 14)
-                                
-                                // Timestamps elapsed, atmos badge underlay, and remaining
-                                HStack {
-                                    Text(formatTime(timeTracker.currentTime))
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.5))
-                                    
-                                    Spacer()
-                                    
-                                    if let track = engine.currentTrack {
-                                        AudioQualityTagsView(track: track, theme: state.theme)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Text("-" + formatTime(max(0, engine.duration - timeTracker.currentTime)))
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
-                            }
-                            .frame(width: 420)
-                            
-                            // Playback Controls (Matches double arrow and flat play styles)
-                            HStack(alignment: .center) {
-                                // Shuffle switch
-                                Button(action: {
-                                    engine.triggerHaptic(pattern: .generic)
-                                    state.toggleShuffle(currentTrack: engine.currentTrack)
-                                }) {
-                                    Image(systemName: "shuffle")
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundColor(state.isQueueShuffled ? Color.red : .white.opacity(0.44))
-                                        .frame(width: 40, height: 40)
-                                }
-                                .buttonStyle(PremiumButtonStyle())
-                                
-                                Spacer()
-                                
-                                // Back button
-                                Button(action: {
-                                    engine.triggerHaptic(pattern: .alignment)
-                                    state.playPrevious(engine: engine)
-                                }) {
-                                    Image(systemName: "backward.fill")
-                                        .font(.system(size: 24))
-                                        .foregroundColor(.white)
-                                        .frame(width: 40, height: 40)
-                                }
-                                .buttonStyle(PremiumButtonStyle())
-                                
-                                Spacer()
-                                
-                                // Play Pause central toggle (flat button with no colored circle, simple bold toggle)
-                                Button(action: {
-                                    engine.triggerHaptic(pattern: .generic)
-                                    engine.togglePlayPause()
-                                }) {
-                                    Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.system(size: 38))
-                                        .foregroundColor(.white)
-                                        .frame(width: 50, height: 50)
-                                }
-                                .buttonStyle(PremiumButtonStyle())
-                                
-                                Spacer()
-                                
-                                // Forward button
-                                Button(action: {
-                                    engine.triggerHaptic(pattern: .alignment)
-                                    state.playNext(engine: engine)
-                                }) {
-                                    Image(systemName: "forward.fill")
-                                        .font(.system(size: 24))
-                                        .foregroundColor(.white)
-                                        .frame(width: 40, height: 40)
-                                }
-                                .buttonStyle(PremiumButtonStyle())
-                                
-                                Spacer()
-                                
-                                // Repeat switch
-                                Button(action: {
-                                    engine.triggerHaptic(pattern: .generic)
-                                    state.repeatMode = (state.repeatMode + 1) % 3
-                                }) {
-                                    Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat")
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundColor(state.repeatMode > 0 ? Color.red : .white.opacity(0.44))
-                                        .frame(width: 40, height: 40)
-                                }
-                                .buttonStyle(PremiumButtonStyle())
-                            }
-                            .frame(width: 420)
-                        }
-                        
-                        if effectiveRightPanel == .none {
-                            Spacer()
-                        } else {
-                            // RIGHT COLUMN: Selected Panel
-                            Group {
-                                switch effectiveRightPanel {
-                                case .lyrics:
-                                    ScrollViewReader { proxy in
-                                        ScrollView(showsIndicators: false) {
-                                            if engine.parsedLyrics.isEmpty {
-                                                EmptyView()
-                                            } else {
-                                                VStack(alignment: .leading, spacing: 36) {
-                                                    ForEach(engine.parsedLyrics) { line in
-                                                        LyricLineView(
-                                                            line: line,
-                                                            isActive: activeLineId == line.id,
-                                                            currentTime: timeTracker.currentTime,
-                                                            onSeek: { targetTime in
-                                                                engine.seek(to: targetTime)
-                                                            }
-                                                        )
-                                                        .equatable()
-                                                        .id(line.id)
-                                                    }
-                                                }
-                                                .padding(.vertical, 240) // Centers current line nicely
-                                                .padding(.horizontal, 24)
-                                            }
-                                        }
-                                        .frame(width: 540)
-                                        .onChange(of: timeTracker.currentTime) { _, newValue in
-                                            if let currentActive = engine.parsedLyrics.last(where: { $0.timestamp <= newValue }) {
-                                                if activeLineId != currentActive.id { activeLineId = currentActive.id; withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
-                                                    proxy.scrollTo(currentActive.id, anchor: .center) }
-                                                }
-                                            }
-                                        }
-                                    }
-                                case .queue:
-                                    QueueSidebarView(state: state, engine: engine, timeTracker: engine.timeTracker, isFullscreen: true)
-                                        .frame(width: 440)
-                                        .cornerRadius(16)
-                                        .shadow(radius: 10)
-                                        .padding(.vertical, 20)
-                                case .output:
-                                    OutputDeviceSidebarView(state: state, engine: engine, timeTracker: engine.timeTracker, isFullscreen: true)
-                                        .frame(width: 440)
-                                        .cornerRadius(16)
-                                        .shadow(radius: 10)
-                                        .padding(.vertical, 20)
-                                case .none:
-                                    EmptyView()
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
-                    .padding(.horizontal, 48)
-                    
-                    // Action Layout moved to the bottom (above footer specifications)
-                    Divider()
-                        .background(Color.white.opacity(0.1))
-                    
-                    HStack {
-                        HStack(spacing: 8) {
-                            Image(systemName: "waveform.path")
-                                .font(.body)
-                                .foregroundColor(.red)
-                            Text("APPLE MUSIC THEATER PLAYER")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.6))
-                        }
-                        
-                        Spacer()
-                        
-                        HStack(spacing: 20) {
-                            let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
-                            Button(action: {
-                                if hasLyrics {
-                                    rightPanel = rightPanel == .lyrics ? .none : .lyrics
-                                }
-                            }) {
-                                Image(systemName: "quote.bubble")
-                                    .font(.title3)
-                                    .foregroundColor(!hasLyrics ? .white.opacity(0.2) : (rightPanel == .lyrics ? .red : .white.opacity(0.6)))
-                            }
-                            .buttonStyle(PremiumButtonStyle())
-                            .disabled(!hasLyrics)
-                            .help(hasLyrics ? "Synced Lyrics" : "No Lyrics Available")
-                            
-                            Button(action: {
-                                rightPanel = rightPanel == .queue ? .none : .queue
-                            }) {
-                                Image(systemName: "list.bullet.rectangle.portrait")
-                                    .font(.title3)
-                                    .foregroundColor(rightPanel == .queue ? .red : .white.opacity(0.6))
-                            }
-                            .buttonStyle(PremiumButtonStyle())
-                            .help("Playing Next")
-                            
-                            Button(action: {
-                                rightPanel = rightPanel == .output ? .none : .output
-                            }) {
-                                Image(systemName: "airplayaudio")
-                                    .font(.title3)
-                                    .foregroundColor(rightPanel == .output ? .indigo : .white.opacity(0.6))
-                            }
-                            .buttonStyle(PremiumButtonStyle())
-                            .help("Audio Output Device")
-                        }
-                        .padding(.trailing, 20)
-                        
-                        Button(action: { enableDynamicBackground.toggle(); updateCachedColors() }) {
-                            Image(systemName: "drop.halffull")
-                                .font(.system(size: 14))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(enableDynamicBackground ? .white : .white.opacity(0.3))
-                        .help("Dynamic Liquid Background")
-                        
-                        Button(action: { isPresented = false }) {
-                            Label("Exit Fullscreen", systemImage: "arrow.down.right.and.arrow.up.left")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.white.opacity(0.15))
-                        .foregroundColor(.white)
-                        .cornerRadius(20)
-                        .keyboardShortcut(.escape, modifiers: [])
-                    }
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 16)
-                    .background(Color.black.opacity(0.3))
-                    
-                    // Bottom Specs status line
-                    HStack {
-                        Text("DAC CORE CONFIG: DIRECT MULTI-CHANNEL")
-                        Spacer()
-                        Text("DOLBY ATMOS BINAURAL DECODER")
-                    }
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 12)
-                    .background(Color.black.opacity(0.5))
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onAppear {
-                    updateCachedColors()
-                }
-                .onChange(of: engine.currentTrack) { _, newValue in
-                    updateCachedColors()
-                }
-                .alert("New Playlist", isPresented: $showNewPlaylistAlert, actions: {
-                    TextField("Playlist Name", text: $newPlaylistName)
-                    Button("Create", action: {
-                        if !newPlaylistName.isEmpty {
-                            state.createNewPlaylist(name: newPlaylistName, initialTrack: trackToAdd)
-                        }
-                    })
-                    Button("Cancel", role: .cancel, action: {})
-                }, message: {
-                    Text("Enter a name for the new playlist.")
-                })
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, 56)
+                .padding(.bottom, 28)
+                .animation(.easeInOut(duration: 0.3), value: effectiveRightPanel)
             }
-            .ignoresSafeArea(.all)
         }
-    
-    private func isLineActive(_ line: SyncedLyricLine) -> Bool {
-        if line.isBreak {
-            return timeTracker.currentTime >= line.breakStart && timeTracker.currentTime <= line.breakEnd
+        .environment(\.colorScheme, .dark)
+        .onAppear { updateCachedColors() }
+        .onChange(of: engine.currentTrack?.id) { _, _ in updateCachedColors() }
+        .alert("New Playlist", isPresented: $showNewPlaylistAlert) {
+            TextField("Playlist Name", text: $newPlaylistName)
+            Button("Create") {
+                if !newPlaylistName.isEmpty, let track = engine.currentTrack {
+                    state.createNewPlaylist(name: newPlaylistName, initialTrack: track)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter a name for the new playlist.")
         }
-        return timeTracker.currentTime >= line.timestamp && timeTracker.currentTime < line.endTime
     }
-    
-    private func formatTime(_ sec: TimeInterval) -> String {
-        let m = Int(sec) / 60
-        let s = Int(sec) % 60
-        return String(format: "%d:%02d", m, s)
+
+    private func topBar(_ effectiveRightPanel: FullLyricsRightPanel) -> some View {
+        let glass = ThemeCatalog.theme(named: "True Black")
+        let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
+        return HStack(spacing: 6) {
+            Button {
+                isPresented = false
+            } label: {
+                Image(systemName: "chevron.down").font(.system(size: 15, weight: .bold))
+            }
+            .buttonStyle(IconButtonStyle(theme: glass, size: 34))
+            .keyboardShortcut(.escape, modifiers: [])
+            .help("Close (Esc)")
+
+            Spacer()
+
+            Button {
+                rightPanel = rightPanel == .lyrics ? .none : .lyrics
+            } label: {
+                Image(systemName: "quote.bubble").font(.system(size: 14, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(theme: glass, isActive: effectiveRightPanel == .lyrics, size: 34, activeColor: .white))
+            .disabled(!hasLyrics)
+            .help(hasLyrics ? "Lyrics" : "No Lyrics Available")
+
+            Button {
+                rightPanel = rightPanel == .queue ? .none : .queue
+            } label: {
+                Image(systemName: "list.bullet").font(.system(size: 14, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(theme: glass, isActive: effectiveRightPanel == .queue, size: 34, activeColor: .white))
+            .help("Playing Next")
+
+            Button {
+                rightPanel = rightPanel == .output ? .none : .output
+            } label: {
+                Image(systemName: "airplayaudio").font(.system(size: 14, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(theme: glass, isActive: effectiveRightPanel == .output, size: 34, activeColor: .white))
+            .help("Audio Output")
+
+            Button {
+                enableDynamicBackground.toggle()
+                updateCachedColors()
+            } label: {
+                Image(systemName: "drop.halffull").font(.system(size: 14, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(theme: glass, isActive: enableDynamicBackground, size: 34, activeColor: .white))
+            .help("Dynamic Background")
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 34)
+        .padding(.bottom, 8)
+    }
+
+    private func playerColumn(_ theme: ThemeColor) -> some View {
+        let glass = ThemeCatalog.theme(named: "True Black")
+        return VStack(spacing: 28) {
+            Button {
+                if let track = engine.currentTrack {
+                    state.showAlbum(track.album)
+                    isPresented = false
+                }
+            } label: {
+                ZStack {
+                    if let track = engine.currentTrack {
+                        ArtworkView(track: track, pixelSize: 900, cornerRadius: 20)
+                        if state.animatedArtworkEnabled {
+                            AnimatedArtworkView(track: track, cornerRadius: 20)
+                                .allowsHitTesting(false)
+                        }
+                    } else {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.08))
+                    }
+                }
+                .frame(width: 400, height: 400)
+            }
+            .buttonStyle(.plain)
+            .scaleEffect(engine.isPlaying ? (hoveringArt ? 1.015 : 1.0) : 0.88)
+            .shadow(color: .black.opacity(engine.isPlaying ? 0.5 : 0.25), radius: engine.isPlaying ? 40 : 16, y: engine.isPlaying ? 22 : 6)
+            .animation(.spring(response: 0.5, dampingFraction: 0.78), value: engine.isPlaying)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hoveringArt)
+            .onHover { hoveringArt = $0 }
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(engine.currentTrack?.title ?? "Not Playing")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if let track = engine.currentTrack {
+                        LinkText(text: "\(track.artist) — \(track.album)", font: .system(size: 14, weight: .medium), color: .white.opacity(0.62), hoverColor: .white) {
+                            state.showArtist(track.artist)
+                            isPresented = false
+                        }
+                    }
+                }
+                Spacer()
+                if let track = engine.currentTrack {
+                    let isFav = state.isFavorite(track.id)
+                    Button {
+                        state.toggleFavorite(track: track)
+                    } label: {
+                        Image(systemName: isFav ? "heart.fill" : "heart").font(.system(size: 15, weight: .semibold))
+                    }
+                    .buttonStyle(IconButtonStyle(theme: glass, isActive: isFav, size: 36, activeColor: .white))
+
+                    Menu {
+                        Menu("Add to Playlist") {
+                            Button("New Playlist…") {
+                                newPlaylistName = ""
+                                showNewPlaylistAlert = true
+                            }
+                            Divider()
+                            ForEach(state.playlists) { playlist in
+                                Button(playlist.name) { state.addTrackToPlaylist(track: track, playlistId: playlist.id) }
+                            }
+                        }
+                        Button("Show in Finder") {
+                            if let url = track.fileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .frame(width: 36, height: 36)
+                            .background(Color.white.opacity(0.1), in: Circle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
+            }
+            .frame(width: 420)
+
+            VStack(spacing: 10) {
+                PlaybackScrubber(engine: engine, timeTracker: timeTracker, theme: theme, style: .fullscreen)
+                if let track = engine.currentTrack {
+                    AudioQualityTagsView(track: track, theme: glass)
+                }
+            }
+            .frame(width: 460)
+
+            HStack(spacing: 0) {
+                Button {
+                    state.toggleShuffle(currentTrack: engine.currentTrack)
+                } label: {
+                    Image(systemName: "shuffle").font(.system(size: 16, weight: .semibold))
+                }
+                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.isQueueShuffled, size: 40, activeColor: .white))
+                Spacer()
+                Button {
+                    state.playPrevious(engine: engine)
+                } label: {
+                    Image(systemName: "backward.fill").font(.system(size: 26))
+                }
+                .buttonStyle(IconButtonStyle(theme: glass, size: 52, activeColor: .white))
+                Spacer()
+                Button {
+                    engine.togglePlayPause()
+                } label: {
+                    Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(.black)
+                        .offset(x: engine.isPlaying ? 0 : 2)
+                        .frame(width: 64, height: 64)
+                        .background(.white, in: Circle())
+                }
+                .buttonStyle(PressableStyle())
+                    Spacer()
+                Button {
+                    state.playNext(engine: engine)
+                } label: {
+                    Image(systemName: "forward.fill").font(.system(size: 26))
+                }
+                .buttonStyle(IconButtonStyle(theme: glass, size: 52, activeColor: .white))
+                Spacer()
+                Button {
+                    state.repeatMode = (state.repeatMode + 1) % 3
+                } label: {
+                    Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat").font(.system(size: 16, weight: .semibold))
+                }
+                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.repeatMode > 0, size: 40, activeColor: .white))
+            }
+            .frame(width: 400)
+
+            HStack(spacing: 8) {
+                Image(systemName: "speaker.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                ThinSlider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), theme: glass)
+                    .frame(width: 220, height: 16)
+                Image(systemName: "speaker.wave.3.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+            }
+        }
+    }
+}
+
+/// Lyrics column for the full screen player; the only part that tracks playback time.
+struct FullLyricsList: View {
+    @ObservedObject var engine: AudioEngineManager
+    @ObservedObject var timeTracker: AudioTimeTracker
+    @State private var activeLineId: UUID?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 30) {
+                    ForEach(engine.parsedLyrics) { line in
+                        LyricLineView(
+                            line: line,
+                            isActive: activeLineId == line.id,
+                            currentTime: line.isBreak ? timeTracker.currentTime : 0,
+                            onSeek: { engine.seek(to: $0) }
+                        )
+                        .equatable()
+                        .id(line.id)
+                    }
+                }
+                .padding(.vertical, 260)
+                .padding(.horizontal, 12)
+            }
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.12),
+                    .init(color: .black, location: 0.88),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .top, endPoint: .bottom)
+            )
+            .onChange(of: timeTracker.currentTime) { _, newValue in
+                guard let current = engine.parsedLyrics.last(where: { $0.timestamp <= newValue }),
+                      current.id != activeLineId else { return }
+                activeLineId = current.id
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
+                    proxy.scrollTo(current.id, anchor: .center)
+                }
+            }
+        }
     }
 }
 
 // MARK: - High-performance Equatable Cached Lyric Row Component
 struct LyricLineView: View, Equatable {
-        let line: SyncedLyricLine
-        let isActive: Bool
-        let currentTime: TimeInterval
-        let onSeek: (TimeInterval) -> Void
-        @State private var isHovered = false
-        
-        static func == (lhs: LyricLineView, rhs: LyricLineView) -> Bool {
-            if lhs.line.id != rhs.line.id { return false }
-            if lhs.isActive != rhs.isActive { return false }
-            if lhs.isHovered != rhs.isHovered { return false }
-            if lhs.line.isBreak {
-                let lhsStep = Int(lhs.currentTime * 4.0)
-                let rhsStep = Int(rhs.currentTime * 4.0)
-                return lhsStep == rhsStep
-            }
-            return true
+    let line: SyncedLyricLine
+    let isActive: Bool
+    let currentTime: TimeInterval
+    let onSeek: (TimeInterval) -> Void
+    @State private var isHovered = false
+
+    static func == (lhs: LyricLineView, rhs: LyricLineView) -> Bool {
+        if lhs.line.id != rhs.line.id { return false }
+        if lhs.isActive != rhs.isActive { return false }
+        if lhs.line.isBreak {
+            return Int(lhs.currentTime * 4.0) == Int(rhs.currentTime * 4.0)
         }
-        
-        private func parseAdlibs(from text: String) -> (String, String?) {
-            let pattern = "(\\(.*?\\)|\\[.*?\\])"
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-                return (text, nil)
-            }
-            
-            let nsString = text as NSString
-            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-            
-            if matches.isEmpty { return (text, nil) }
-            
-            var adlibs = [String]()
-            var mainText = text
-            
-            for match in matches.reversed() {
-                let matchRange = match.range
-                let adlib = nsString.substring(with: matchRange)
-                adlibs.append(adlib)
-                mainText = (mainText as NSString).replacingCharacters(in: matchRange, with: "")
-            }
-            
-            let finalMain = mainText.trimmingCharacters(in: .whitespaces)
-            let finalAdlibs = adlibs.reversed().joined(separator: " ").trimmingCharacters(in: .whitespaces)
-            
-            return (finalMain.isEmpty ? finalAdlibs : finalMain, finalMain.isEmpty ? nil : finalAdlibs)
-        }
-        
-        var body: some View {
-            Group {
-                if line.isBreak {
-                    InstrumentalBreakDots(
-                        currentTime: currentTime,
-                        breakStart: line.breakStart,
-                        breakEnd: line.breakEnd
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    let parsed = parseAdlibs(from: line.text)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(parsed.0)
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                            .foregroundColor(isActive ? .white : .white.opacity(0.24))
-                        
-                        if let adlib = parsed.1 {
-                            Text(adlib)
-                                .font(.system(size: 22, weight: .bold, design: .rounded))
-                                .foregroundColor(isActive ? .white.opacity(0.5) : .white.opacity(0.12))
-                        }
-                    }
-                    .scaleEffect(isActive ? 1.04 : 1.0)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(12)
-            .contentShape(Rectangle())
-            .background(isHovered ? Color.white.opacity(0.12).cornerRadius(8) : Color.clear.cornerRadius(8))
-            .onHover { hovering in
-                withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) {
-                    isHovered = hovering
-                }
-            }
-            .onTapGesture {
-                onSeek(line.timestamp)
-            }
-            .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isActive)
-        }
+        return true
     }
 
+    private static let adlibRegex = try? NSRegularExpression(pattern: "(\\(.*?\\)|\\[.*?\\])", options: [])
+
+    private func parseAdlibs(from text: String) -> (String, String?) {
+        guard let regex = Self.adlibRegex else { return (text, nil) }
+        let nsString = text as NSString
+        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+        if matches.isEmpty { return (text, nil) }
+
+        var adlibs = [String]()
+        var mainText = text
+        for match in matches.reversed() {
+            adlibs.append(nsString.substring(with: match.range))
+            mainText = (mainText as NSString).replacingCharacters(in: match.range, with: "")
+        }
+        let finalMain = mainText.trimmingCharacters(in: .whitespaces)
+        let finalAdlibs = adlibs.reversed().joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return (finalMain.isEmpty ? finalAdlibs : finalMain, finalMain.isEmpty ? nil : finalAdlibs)
+    }
+
+    var body: some View {
+        Group {
+            if line.isBreak {
+                InstrumentalBreakDots(currentTime: currentTime, breakStart: line.breakStart, breakEnd: line.breakEnd)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                let parsed = parseAdlibs(from: line.text)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(parsed.0)
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundColor(isActive ? .white : .white.opacity(0.28))
+                    if let adlib = parsed.1 {
+                        Text(adlib)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(isActive ? .white.opacity(0.55) : .white.opacity(0.14))
+                    }
+                }
+                .blur(radius: isActive ? 0 : 0.6)
+                .scaleEffect(isActive ? 1.03 : 1.0, anchor: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .contentShape(Rectangle())
+        .background(isHovered ? Color.white.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering }
+        }
+        .onTapGesture { onSeek(line.timestamp) }
+        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isActive)
+    }
+}
