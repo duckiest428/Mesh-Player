@@ -25,7 +25,6 @@ struct SongTableView: View {
     @State private var pendingPlaylistTracks: [LocalTrack] = []
     @State private var columnCustomization = TableColumnCustomization<LocalTrack>()
     @State private var editingPlaylist: Playlist?
-    @State private var confirmDelete: Playlist?
     @State private var tableIdentity = TableIdentity()
 
     /// Tracks what the table last showed. NSTableView measures every *inserted* row, which made
@@ -89,14 +88,6 @@ struct SongTableView: View {
         }
         .sheet(item: $editingPlaylist) { playlist in
             PlaylistEditorSheet(state: state, playlist: playlist)
-        }
-        .confirmationDialog("Delete “\(confirmDelete?.name ?? "")”?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
-            Button("Delete Playlist", role: .destructive) {
-                if let playlist = confirmDelete { state.deletePlaylist(playlist.id) }
-                confirmDelete = nil
-            }
-        } message: {
-            Text(state.removePlaylistSongsFromLibrary ? "Its songs will also be removed from your library." : "The songs stay in your library.")
         }
     }
 
@@ -187,7 +178,7 @@ struct SongTableView: View {
             Button("Export as M3U…") { exportM3U(playlist) }
             if !playlist.isAppleMusicFavorites {
                 Divider()
-                Button("Delete Playlist…", role: .destructive) { confirmDelete = playlist }
+                Button("Delete Playlist…", role: .destructive) { state.confirmDeletion(of: playlist) }
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -423,8 +414,8 @@ struct SongTableView: View {
                 let urls = targets.compactMap(\.fileURL)
                 if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
             }
-            Button(targets.count > 1 ? "Remove \(targets.count) Songs from Library" : "Remove from Library", role: .destructive) {
-                state.removeTracks(ids: Set(targets.map(\.id)))
+            Button(targets.count > 1 ? "Remove \(targets.count) Songs from Library…" : "Remove from Library…", role: .destructive) {
+                state.confirmRemoval(of: targets)
             }
         }
     }
@@ -1156,7 +1147,6 @@ struct SidebarView: View {
     @State private var renameText = ""
     @State private var editingPlaylist: Playlist?
     @State private var newSmartPlaylist: Playlist?
-    @State private var confirmDelete: Playlist?
     @State private var dropTarget: UUID?
 
     var body: some View {
@@ -1235,14 +1225,6 @@ struct SidebarView: View {
         .sheet(item: $newSmartPlaylist) { playlist in
             PlaylistEditorSheet(state: state, playlist: playlist, isNew: true)
         }
-        .confirmationDialog("Delete “\(confirmDelete?.name ?? "")”?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
-            Button("Delete Playlist", role: .destructive) {
-                if let playlist = confirmDelete { state.deletePlaylist(playlist.id) }
-                confirmDelete = nil
-            }
-        } message: {
-            Text(state.removePlaylistSongsFromLibrary ? "Its songs will also be removed from your library." : "The songs stay in your library.")
-        }
     }
 
     private func row(_ title: String, icon: String, tag: String) -> some View {
@@ -1309,7 +1291,7 @@ struct SidebarView: View {
             Button("Export to Apple Music…") { AppleMusicSync.shared.presentExport(playlists: [playlist.id], state: state) }
             if !playlist.isAppleMusicFavorites {
                 Divider()
-                Button("Delete Playlist…", role: .destructive) { confirmDelete = playlist }
+                Button("Delete Playlist…", role: .destructive) { state.confirmDeletion(of: playlist) }
             }
         }
     }

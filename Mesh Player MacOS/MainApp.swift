@@ -106,6 +106,7 @@ struct macOSMusicPlayerContentView: View {
         .sheet(isPresented: $appleMusicSync.isPresented) {
             AppleMusicSyncSheet(theme: theme)
         }
+        .removalDialog(state: state)
     }
 
     @ViewBuilder
@@ -471,7 +472,6 @@ struct PreferencesView: View {
             settingsGroup(theme, title: "Your Library") {
                 Text("\(Fmt.songs(stats.songs)) · \(Fmt.count(stats.albums)) albums · \(Fmt.count(stats.artists)) artists · \(state.playlists.count) playlists")
                     .foregroundStyle(theme.textSecondary)
-                Toggle("Deleting a playlist also removes its songs from the library", isOn: $state.removePlaylistSongsFromLibrary)
                 HStack(spacing: 8) {
                     Button("Show Mesh Library in Finder") {
                         NSWorkspace.shared.activateFileViewerSelecting([LibraryManager.shared.libraryDirectory])

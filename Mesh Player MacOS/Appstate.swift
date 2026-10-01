@@ -684,7 +684,6 @@ class AppStateManager: ObservableObject {
         enableAtmos = bool("enableAtmos", true)
         spatialAudioActive = bool("spatialAudioActive", false)
         animatedArtworkEnabled = bool("animatedArtworkEnabled", true)
-        removePlaylistSongsFromLibrary = bool("removePlaylistSongsFromLibrary", false)
         showTimeColumn = bool("showTimeColumn", true)
         showArtistColumn = bool("showArtistColumn", true)
         showYearColumn = bool("showYearColumn", true)
@@ -1124,17 +1123,66 @@ class AppStateManager: ObservableObject {
         if changed { tracks = updated }
     }
 
-    func deletePlaylist(_ id: UUID) {
+    /// What happens to a deleted playlist's songs.
+    enum PlaylistSongsFate {
+        case keep
+        case removeFromLibrary
+        case moveFilesToTrash
+    }
+
+    /// A removal waiting for the user to confirm (shown as one dialog by the main window).
+    enum PendingRemoval: Identifiable {
+        case songs([LocalTrack])
+        case playlist(Playlist)
+
+        var id: String {
+            switch self {
+            case .songs(let tracks): return "songs-" + tracks.map(\.id.uuidString).joined()
+            case .playlist(let playlist): return "playlist-" + playlist.id.uuidString
+            }
+        }
+    }
+
+    @Published var pendingRemoval: PendingRemoval?
+
+    func confirmRemoval(of tracks: [LocalTrack]) {
+        guard !tracks.isEmpty else { return }
+        pendingRemoval = .songs(tracks)
+    }
+
+    func confirmDeletion(of playlist: Playlist) {
+        pendingRemoval = .playlist(playlist)
+    }
+
+    /// Removes songs from the library; with `trashFiles`, their audio files go to the Trash too.
+    /// Returns how many files couldn't be moved.
+    @discardableResult
+    func removeFromLibrary(_ ids: Set<UUID>, trashFiles: Bool) -> Int {
+        let urls = trashFiles ? tracks.filter { ids.contains($0.id) }.compactMap(\.fileURL) : []
+        removeTracks(ids: ids)
+        var failed = 0
+        for url in urls where FileManager.default.fileExists(atPath: url.path) {
+            do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) } catch { failed += 1 }
+        }
+        return failed
+    }
+
+    func deletePlaylist(_ id: UUID, songs fate: PlaylistSongsFate = .keep) {
         guard let index = playlists.firstIndex(where: { $0.id == id }) else { return }
         let playlist = playlists[index]
+        let playlistSongs = resolvedTracks(of: playlist)
         if let art = playlist.artworkFileName {
             try? FileManager.default.removeItem(at: Self.playlistArtworkFolder.appendingPathComponent(art))
         }
         playlists.remove(at: index)
 
-        if removePlaylistSongsFromLibrary {
-            let trackIds = Set(playlist.tracks.map { $0.id })
-            tracks.removeAll { trackIds.contains($0.id) }
+        switch fate {
+        case .keep:
+            break
+        case .removeFromLibrary:
+            removeFromLibrary(Set(playlistSongs.map(\.id)), trashFiles: false)
+        case .moveFilesToTrash:
+            removeFromLibrary(Set(playlistSongs.map(\.id)), trashFiles: true)
         }
         if selectedTab == "playlist-\(id.uuidString)" {
             selectedTab = "songs"
