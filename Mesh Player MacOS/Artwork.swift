@@ -72,6 +72,15 @@ nonisolated final class ArtworkStore: @unchecked Sendable {
         memory.object(forKey: "\(track.artworkKey)@\(Int(Self.bucket(for: pixelSize)))" as NSString)
     }
 
+    /// The sharpest size of this artwork already decoded in memory, if any. Shown (scaled) while
+    /// a bigger size loads, so a larger view never flashes the placeholder.
+    func anyCachedImage(for track: LocalTrack) -> NSImage? {
+        for bucket in Self.buckets.reversed() {
+            if let hit = memory.object(forKey: "\(track.artworkKey)@\(Int(bucket))" as NSString) { return hit }
+        }
+        return nil
+    }
+
     func image(for track: LocalTrack, pixelSize: CGFloat) async -> NSImage? {
         let bucket = Self.bucket(for: pixelSize)
         let memKey = "\(track.artworkKey)@\(Int(bucket))" as NSString
@@ -236,7 +245,8 @@ struct ArtworkView: View {
 
     var body: some View {
         let key = track?.artworkKey
-        let shown: NSImage? = (loadedKey == key ? image : nil) ?? track.flatMap { ArtworkStore.shared.cachedImage(for: $0, pixelSize: pixelSize) }
+        let shown: NSImage? = (loadedKey == key ? image : nil)
+            ?? track.flatMap { ArtworkStore.shared.cachedImage(for: $0, pixelSize: pixelSize) ?? ArtworkStore.shared.anyCachedImage(for: $0) }
 
         ZStack {
             if let shown {

@@ -259,13 +259,22 @@ struct ArtworkViewerSheet: View {
                         .aspectRatio(1, contentMode: .fit)
                 case .square:
                     if let square {
-                        LoopingVideoView(url: square)
-                            .aspectRatio(1, contentMode: .fit)
+                        // The still sits underneath until the first video frame is ready.
+                        ZStack {
+                            ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
+                            LoopingVideoView(url: square)
+                        }
+                        .aspectRatio(1, contentMode: .fit)
                     }
                 case .tall:
                     if let tall {
-                        LoopingVideoView(url: tall)
-                            .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                        ZStack {
+                            ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
+                                .blur(radius: 30)
+                            LoopingVideoView(url: tall)
+                        }
+                        .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                        .clipped()
                     }
                 }
             }
