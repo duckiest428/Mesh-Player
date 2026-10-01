@@ -121,6 +121,8 @@ nonisolated struct Playlist: Identifiable, Hashable, Codable {
     var dateModified: Date? = nil
     /// Apple Music persistent ID of the playlist this one was imported from or exported to.
     var appleMusicID: String? = nil
+    /// Set when the playlist was made on a synced iPhone (deleting it there deletes it here).
+    var createdOnDevice: String? = nil
 
     var tracks: [LocalTrack] {
         return playlistTracks.map { $0.track }

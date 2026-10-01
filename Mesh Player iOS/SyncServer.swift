@@ -197,6 +197,21 @@ final class SyncServer: ObservableObject {
         try await channel.send(.hello(SyncHello(deviceId: SyncIdentity.deviceId, name: UIDevice.current.name, platform: "ios", version: MeshSync.protocolVersion)))
         try await channel.send(.inventory(library.makeInventory()))
 
+        // The Mac keeps everything: first it collects songs that were added on this iPhone.
+        guard case .requestUploads(let requested) = try await channel.nextMessage() else { throw SyncError.protocolError("Expected the Mac's upload request") }
+        if !requested.isEmpty { status = .syncing("Sending \(requested.count) song\(requested.count == 1 ? "" : "s") to \(mac.name)") }
+        for idString in requested {
+            guard let id = UUID(uuidString: idString), let upload = library.uploadFile(for: id) else { continue }
+            let size = Int64((try? upload.url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 } ?? 0)
+            try await channel.sendFile(upload.url, header: SyncFileHeader(kind: .audio, id: idString, fileExtension: upload.url.pathExtension, size: size)) { _ in }
+            if let art = upload.artwork, let data = try? Data(contentsOf: art), !data.isEmpty {
+                try await channel.send(.fileBegin(SyncFileHeader(kind: .artwork, id: idString, fileExtension: "jpg", size: Int64(data.count))))
+                try await channel.sendChunk(data)
+                try await channel.send(.fileEnd)
+            }
+        }
+        try await channel.send(.uploadsDone)
+
         guard case .manifest(let manifest) = try await channel.nextMessage() else { throw SyncError.protocolError("Expected the library list") }
         status = .syncing("Syncing with \(mac.name)")
         library.applyManifest(manifest)
@@ -205,7 +220,7 @@ final class SyncServer: ObservableObject {
         let progress = SyncProgress.shared
         progress.reset()
         let receiver = SyncReceiver(channel: channel)
-        try await Task.detached(priority: .userInitiated) {
+        let damaged = try await Task.detached(priority: .userInitiated) {
             try await receiver.run { batch in
                 await MainActor.run {
                     progress.update(batch.progress)
@@ -214,7 +229,7 @@ final class SyncServer: ObservableObject {
             }
         }.value
 
-        let summary = library.finishSync(manifest: manifest)
+        let summary = library.finishSync(manifest: manifest, damaged: damaged)
         try await channel.send(.complete(summary))
         return summary
     }
@@ -252,8 +267,10 @@ nonisolated final class SyncReceiver: @unchecked Sendable {
         self.channel = channel
     }
 
-    /// Returns when the Mac says it has sent everything.
-    func run(deliver: @Sendable (Batch) async -> Void) async throws {
+    /// Returns when the Mac says it has sent everything, with the number of files that arrived
+    /// at the wrong size (they're discarded, so the next sync sends them again).
+    func run(deliver: @Sendable (Batch) async -> Void) async throws -> Int {
+        var damaged = 0
         var progress = SyncProgressInfo(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0)
         var files: [(id: UUID, url: URL)] = []
         var artwork: [(key: String, url: URL)] = []
@@ -290,6 +307,14 @@ nonisolated final class SyncReceiver: @unchecked Sendable {
                 guard let file = current else { break }
                 try? file.handle.close()
                 current = nil
+                // Check every file arrived whole before it joins the library.
+                let written = Int64((try? file.url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 } ?? -1)
+                guard written == file.header.size else {
+                    try? FileManager.default.removeItem(at: file.url)
+                    damaged += 1
+                    progress.filesDone += 1
+                    break
+                }
                 switch file.header.kind {
                 case .audio:
                     if let id = UUID(uuidString: file.header.id) { files.append((id, file.url)) }
@@ -299,7 +324,7 @@ nonisolated final class SyncReceiver: @unchecked Sendable {
                 progress.filesDone += 1
             case .message(.finished):
                 await flush(force: true)
-                return
+                return damaged
             default:
                 break
             }

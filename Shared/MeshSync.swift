@@ -10,11 +10,12 @@
 //    frame = [UInt32 payload length, big endian][UInt8 kind][payload]
 //    kind 1 = JSON-encoded SyncMessage, kind 2 = raw bytes of the file currently being sent
 //
-//  Session:
+//  Session (the Mac is the source of truth; the iPhone reports what it has and what changed):
 //    Mac → hello              iPhone → hello (+ awaitingApproval the first time) → inventory
-//    Mac → manifest (library the iPhone should have, with the iPhone's plays/favorites merged in)
-//    Mac → fileBegin, chunk…, fileEnd   for every song / artwork the iPhone is missing
-//    Mac → finished           iPhone → complete (after removing songs no longer synced)
+//    Mac → requestUploads     iPhone → fileBegin, chunk…, fileEnd per song added on the iPhone → uploadsDone
+//    Mac → manifest (library, settings and play history the iPhone should have)
+//    Mac → fileBegin, chunk…, fileEnd   for every song / artwork the iPhone is missing or has damaged
+//    Mac → finished           iPhone → complete (after checking files and removing what's no longer synced)
 //
 
 import Foundation
@@ -23,7 +24,7 @@ import Network
 nonisolated enum MeshSync {
     static let serviceType = "_meshsync._tcp"
     static let port: UInt16 = 47_811
-    static let protocolVersion = 1
+    static let protocolVersion = 2
     static let chunkSize = 256 * 1024
 }
 
@@ -63,6 +64,41 @@ nonisolated struct SyncPlaylist: Codable, Hashable, Sendable, Identifiable {
     var isSmart: Bool
     var isFavorites: Bool
     var dateModified: Date?
+    /// Custom cover sent as an artwork file under this key.
+    var artworkKey: String? = nil
+}
+
+/// One counted play, with a stable id so both devices can merge histories without duplicates.
+nonisolated struct SyncPlayEvent: Codable, Hashable, Sendable, Identifiable {
+    var id: UUID
+    var trackId: UUID
+    var title: String
+    var artist: String
+    var album: String
+    var genre: String
+    var duration: Double
+    var timestamp: Date
+}
+
+/// Last.fm login made on the Mac, so the iPhone can scrobble to the same account.
+nonisolated struct SyncLastFM: Codable, Hashable, Sendable {
+    var apiKey: String
+    var apiSecret: String
+    var sessionKey: String
+    var username: String
+    var scrobbleEnabled: Bool
+    var syncLoves: Bool
+}
+
+/// Settings the Mac decides for both devices.
+nonisolated struct SyncSettings: Codable, Hashable, Sendable {
+    var themeName: String
+    var mergeCollaborations: Bool
+    /// Songs hidden from the library (they still play inside their playlists).
+    var hiddenTrackIds: [UUID]
+    var favoriteArtists: [String]
+    var animatedArtwork: Bool
+    var lastFM: SyncLastFM?
 }
 
 nonisolated struct SyncHello: Codable, Sendable {
@@ -88,12 +124,23 @@ nonisolated struct SyncInventory: Codable, Sendable {
     /// Playlists created or edited on the iPhone.
     var playlists: [SyncPlaylist]
     var freeSpace: Int64?
+    /// Artwork key → file size, so damaged (empty) covers are sent again.
+    var artworkSizes: [String: Int64]? = nil
+    /// Plays counted on the iPhone since the last sync.
+    var playEvents: [SyncPlayEvent]? = nil
+    /// Playlists deleted on the iPhone since the last sync.
+    var deletedPlaylists: [UUID]? = nil
+    /// Songs added on the iPhone (Files / Finder) that the Mac doesn't have yet.
+    var localSongs: [SyncTrack]? = nil
 }
 
 nonisolated struct SyncManifest: Codable, Sendable {
     var tracks: [SyncTrack]
     var playlists: [SyncPlaylist]
     var sourceName: String
+    var settings: SyncSettings? = nil
+    /// The Mac's full play history (the iPhone keeps it for Statistics and Replay).
+    var playHistory: [SyncPlayEvent]? = nil
 }
 
 nonisolated struct SyncFileHeader: Codable, Sendable {
@@ -122,6 +169,9 @@ nonisolated enum SyncMessage: Codable, Sendable {
     case fileEnd
     case finished
     case complete(String)
+    /// Mac → iPhone: send these songs that were added on the iPhone (track ids).
+    case requestUploads([String])
+    case uploadsDone
 }
 
 nonisolated enum SyncError: LocalizedError {

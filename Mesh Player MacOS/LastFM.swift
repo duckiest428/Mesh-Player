@@ -131,6 +131,13 @@ final class LastFMService: ObservableObject {
         scheduleFlush(after: 1)
     }
 
+    /// The login the iPhone uses to scrobble to the same account (sent when syncing).
+    func syncCredentials() -> SyncLastFM? {
+        guard let sessionKey, let username, hasCredentials else { return nil }
+        return SyncLastFM(apiKey: apiKey.trimmingCharacters(in: .whitespaces), apiSecret: apiSecret.trimmingCharacters(in: .whitespaces),
+                          sessionKey: sessionKey, username: username, scrobbleEnabled: isEnabled, syncLoves: syncLoves)
+    }
+
     func disconnect() {
         authPoll?.cancel()
         sessionKey = nil

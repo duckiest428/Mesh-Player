@@ -53,6 +53,10 @@ nonisolated struct MobilePlaylist: Identifiable, Codable, Hashable, Sendable {
     /// Created or edited on the iPhone since the last sync.
     var isDirty = false
     var dateModified: Date?
+    /// Custom cover (an artwork key) chosen on the Mac.
+    var artworkKey: String?
+    /// Made on this iPhone (deleting it here also deletes it on the Mac).
+    var createdHere: Bool?
 }
 
 nonisolated struct MobileAlbum: Identifiable, Hashable, Sendable {
@@ -80,6 +84,14 @@ private nonisolated struct LibraryFile: Codable {
     var lastSync: Date?
     var lastSyncSource: String?
     var trustedMacs: [String: String]?
+    /// Settings from the Mac (the Last.fm login is kept in the Keychain, not here).
+    var settings: SyncSettings?
+    /// Every counted play, the Mac's and this iPhone's (for Statistics and Replay).
+    var playHistory: [SyncPlayEvent]?
+    /// Plays made here that the Mac hasn't received yet.
+    var pendingEventIds: [UUID]?
+    /// Playlists deleted here since the last sync.
+    var deletedPlaylists: [UUID]?
 }
 
 final class MobileLibrary: ObservableObject {
@@ -93,6 +105,12 @@ final class MobileLibrary: ObservableObject {
     @Published private(set) var trustedMacs: [String: String] = [:]
     @Published private(set) var isImporting = false
     @Published var importMessage: String?
+    /// Settings the Mac decided (theme, hidden songs, collaborations…). nil until the first sync.
+    @Published private(set) var settings: SyncSettings? { didSet { hiddenIds = Set(settings?.hiddenTrackIds ?? []); version &+= 1 } }
+    @Published private(set) var playHistory: [SyncPlayEvent] = []
+    private(set) var hiddenIds: Set<UUID> = []
+    private var pendingEventIds: Set<UUID> = []
+    private var deletedPlaylists: Set<UUID> = []
 
     private var version = 0
     private var cacheVersion = -1
@@ -143,6 +161,10 @@ final class MobileLibrary: ObservableObject {
             lastSync = file.lastSync
             lastSyncSource = file.lastSyncSource
             trustedMacs = file.trustedMacs ?? [:]
+            settings = file.settings
+            playHistory = file.playHistory ?? []
+            pendingEventIds = Set(file.pendingEventIds ?? [])
+            deletedPlaylists = Set(file.deletedPlaylists ?? [])
         }
         ensureFavoritesPlaylist()
     }
@@ -168,7 +190,8 @@ final class MobileLibrary: ObservableObject {
     }
 
     func saveNow() {
-        let file = LibraryFile(songs: songs, playlists: playlists, lastSync: lastSync, lastSyncSource: lastSyncSource, trustedMacs: trustedMacs)
+        let file = LibraryFile(songs: songs, playlists: playlists, lastSync: lastSync, lastSyncSource: lastSyncSource, trustedMacs: trustedMacs,
+                               settings: settings, playHistory: playHistory, pendingEventIds: Array(pendingEventIds), deletedPlaylists: Array(deletedPlaylists))
         DispatchQueue.global(qos: .utility).async {
             if let data = try? Self.encoder.encode(file) { try? data.write(to: Self.databaseURL, options: .atomic) }
         }
@@ -185,7 +208,7 @@ final class MobileLibrary: ObservableObject {
     private func refreshCaches() {
         guard cacheVersion != version else { return }
         cacheVersion = version
-        let available = songs.filter(\.isAvailable)
+        let available = songs.filter { $0.isAvailable && !hiddenIds.contains($0.id) }
         var byAlbum: [String: [Song]] = [:]
         for song in available { byAlbum["\(song.albumArtist.lowercased())|\(song.album.lowercased())", default: []].append(song) }
         cachedAlbums = byAlbum.map { key, list in
@@ -194,14 +217,31 @@ final class MobileLibrary: ObservableObject {
             return MobileAlbum(key: key, title: first.album, artist: first.albumArtist, year: first.info.year, genre: first.genre, songs: sorted)
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         var byArtist: [String: [Song]] = [:]
-        for song in available { byArtist[song.albumArtist, default: []].append(song) }
+        for song in available { byArtist[displayArtist(song.albumArtist), default: []].append(song) }
         cachedArtists = byArtist.map { name, list in
             MobileArtist(name: name, songs: list, albumCount: Set(list.map(\.album)).count)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         cachedById = Dictionary(uniqueKeysWithValues: songs.enumerated().map { ($1.id, $0) })
     }
 
-    var availableSongs: [Song] { songs.filter(\.isAvailable) }
+    /// Songs that can play (their file is here), including ones hidden from the library.
+    var playableSongs: [Song] { songs.filter(\.isAvailable) }
+    /// Songs shown in the library: playable and not hidden by the Mac's "hide from library" playlists.
+    var availableSongs: [Song] { songs.filter { $0.isAvailable && !hiddenIds.contains($0.id) } }
+
+    /// The artist a song is listed under: with the Mac's collaboration setting on, "A & B",
+    /// "A, B" and "A feat. B" become "A".
+    func displayArtist(_ artist: String) -> String {
+        guard settings?.mergeCollaborations == true else { return artist }
+        var name = artist
+        for separator in [" & ", ", ", " feat. ", " ft. ", " featuring ", " with ", " x ", " X "] {
+            if let range = name.range(of: separator) { name = String(name[..<range.lowerBound]) }
+        }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? artist : trimmed
+    }
+
+    func isFavoriteArtist(_ name: String) -> Bool { settings?.favoriteArtists.contains(name) ?? false }
     var albums: [MobileAlbum] { refreshCaches(); return cachedAlbums }
     var artists: [MobileArtist] { refreshCaches(); return cachedArtists }
     var recentlyAddedAlbums: [MobileAlbum] { albums.sorted { $0.dateAdded > $1.dateAdded } }
@@ -223,22 +263,27 @@ final class MobileLibrary: ObservableObject {
         if playlist.isFavorites {
             let explicit = playlist.songIds.compactMap(song).filter(\.isAvailable)
             let ids = Set(explicit.map(\.id))
-            return explicit + availableSongs.filter { $0.isFavorite && !ids.contains($0.id) }
+            return explicit + playableSongs.filter { $0.isFavorite && !ids.contains($0.id) }
         }
         return playlist.songIds.compactMap(song).filter(\.isAvailable)
     }
 
     var totalBytes: Int64 {
-        availableSongs.reduce(0) { $0 + $1.info.fileSize }
+        playableSongs.reduce(0) { $0 + $1.info.fileSize }
     }
 
     // MARK: Listening
 
     func recordPlay(_ id: UUID) {
         guard let idx = songs.firstIndex(where: { $0.id == id }) else { return }
+        let now = Date()
         songs[idx].info.playCount += 1
-        songs[idx].info.lastPlayedDate = Date()
+        songs[idx].info.lastPlayedDate = now
         songs[idx].pendingPlays += 1
+        let s = songs[idx]
+        let event = SyncPlayEvent(id: UUID(), trackId: s.id, title: s.title, artist: s.artist, album: s.album, genre: s.genre, duration: s.duration, timestamp: now)
+        playHistory.append(event)
+        pendingEventIds.insert(event.id)
         save()
     }
 
@@ -254,7 +299,7 @@ final class MobileLibrary: ObservableObject {
 
     @discardableResult
     func createPlaylist(name: String, songs initial: [UUID] = []) -> MobilePlaylist {
-        let playlist = MobilePlaylist(id: UUID(), name: name, description: "", songIds: initial, isDirty: true, dateModified: Date())
+        let playlist = MobilePlaylist(id: UUID(), name: name, description: "", songIds: initial, isDirty: true, dateModified: Date(), createdHere: true)
         playlists.append(playlist)
         save()
         return playlist
@@ -278,6 +323,7 @@ final class MobileLibrary: ObservableObject {
     }
 
     func deletePlaylist(_ id: UUID) {
+        if let playlist = playlists.first(where: { $0.id == id }), playlist.createdHere == true { deletedPlaylists.insert(id) }
         playlists.removeAll { $0.id == id && !$0.isFavorites }
         save()
     }
@@ -327,7 +373,11 @@ final class MobileLibrary: ObservableObject {
                 files[song.id.uuidString] = Int64(size)
             }
         }
-        let art = (try? FileManager.default.contentsOfDirectory(atPath: Self.artworkFolder.path)) ?? []
+        let artFiles = (try? FileManager.default.contentsOfDirectory(at: Self.artworkFolder, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        var artworkSizes: [String: Int64] = [:]
+        for url in artFiles {
+            artworkSizes[url.deletingPathExtension().lastPathComponent] = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 } ?? 0)
+        }
         var changes: [String: SyncTrackChange] = [:]
         for song in songs where !song.isLocal && (song.pendingPlays > 0 || song.favoriteChanged) {
             changes[song.id.uuidString] = SyncTrackChange(playsSinceSync: song.pendingPlays, lastPlayed: song.info.lastPlayedDate,
@@ -337,7 +387,17 @@ final class MobileLibrary: ObservableObject {
             SyncPlaylist(id: $0.id, name: $0.name, description: $0.description, trackIds: $0.songIds, isSmart: false, isFavorites: false, dateModified: $0.dateModified)
         }
         let free = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
-        return SyncInventory(files: files, artworkKeys: art.map { ($0 as NSString).deletingPathExtension }, changes: changes, playlists: dirty, freeSpace: free)
+        let events = playHistory.filter { pendingEventIds.contains($0.id) }
+        let local = songs.filter { $0.isLocal && $0.isAvailable }.map(\.info)
+        return SyncInventory(files: files, artworkKeys: Array(artworkSizes.keys), changes: changes, playlists: dirty, freeSpace: free,
+                             artworkSizes: artworkSizes, playEvents: events, deletedPlaylists: Array(deletedPlaylists), localSongs: local)
+    }
+
+    /// File for a song added on this iPhone that the Mac asked for.
+    func uploadFile(for id: UUID) -> (song: Song, url: URL, artwork: URL?)? {
+        guard let song = song(id), song.isLocal, let url = fileURL(for: song) else { return nil }
+        let art = Self.artworkURL(for: song.artworkKey)
+        return (song, url, FileManager.default.fileExists(atPath: art.path) ? art : nil)
     }
 
     /// Applies the Mac's metadata. Plays and favorites were merged on the Mac, so local counters reset.
@@ -346,6 +406,8 @@ final class MobileLibrary: ObservableObject {
         var updated: [Song] = manifest.tracks.map { track in
             var song = existing[track.id] ?? Song(info: track)
             song.info = track
+            // Songs added here and uploaded are now the Mac's too.
+            song.isLocal = false
             song.pendingPlays = 0
             song.favoriteChanged = false
             if let name = song.fileName, !FileManager.default.fileExists(atPath: Self.musicFolder.appendingPathComponent(name).path) { song.fileName = nil }
@@ -354,8 +416,24 @@ final class MobileLibrary: ObservableObject {
         let manifestIds = Set(manifest.tracks.map(\.id))
         updated.append(contentsOf: songs.filter { $0.isLocal && !manifestIds.contains($0.id) })
         songs = updated
+        let createdHere = Set(playlists.filter { $0.createdHere == true }.map(\.id))
         var lists = manifest.playlists.map { p in
-            MobilePlaylist(id: p.id, name: p.name, description: p.description, songIds: p.trackIds, isSmart: p.isSmart, isFavorites: p.isFavorites, dateModified: p.dateModified)
+            MobilePlaylist(id: p.id, name: p.name, description: p.description, songIds: p.trackIds, isSmart: p.isSmart, isFavorites: p.isFavorites,
+                           dateModified: p.dateModified, artworkKey: p.artworkKey, createdHere: createdHere.contains(p.id) ? true : nil)
+        }
+        // The Mac decides settings; the Last.fm login goes to the Keychain.
+        if let incoming = manifest.settings {
+            MobileLastFM.shared.update(from: incoming.lastFM)
+            var stored = incoming
+            stored.lastFM = nil
+            settings = stored
+            UserDefaults.standard.set(incoming.animatedArtwork, forKey: "animatedArtwork")
+        }
+        // Play history: the Mac's, plus plays made here that it hasn't seen yet.
+        if let macHistory = manifest.playHistory {
+            let macIds = Set(macHistory.map(\.id))
+            let localOnly = playHistory.filter { pendingEventIds.contains($0.id) && !macIds.contains($0.id) }
+            playHistory = (macHistory + localOnly).sorted { $0.timestamp < $1.timestamp }
         }
         if !lists.contains(where: \.isFavorites) { lists.insert(MobilePlaylist(id: UUID(), name: "Favorites", description: "Songs you love", songIds: [], isFavorites: true), at: 0) }
         // Playlists that only hold songs added on the iPhone stay.
@@ -408,7 +486,7 @@ final class MobileLibrary: ObservableObject {
     }
 
     /// Ends a sync: removes songs that are no longer part of it and remembers the Mac.
-    func finishSync(manifest: SyncManifest) -> String {
+    func finishSync(manifest: SyncManifest, damaged: Int = 0) -> String {
         let keep = Set(manifest.tracks.map(\.id))
         let removed = songs.filter { !$0.isLocal && !keep.contains($0.id) }
         for song in removed {
@@ -421,6 +499,15 @@ final class MobileLibrary: ObservableObject {
             try? FileManager.default.removeItem(at: Self.musicFolder.appendingPathComponent(name))
         }
         for i in playlists.indices { playlists[i].isDirty = false }
+        // The Mac now has these.
+        pendingEventIds.removeAll()
+        deletedPlaylists.removeAll()
+        // Covers nothing uses any more.
+        var keys = Set(songs.map(\.artworkKey))
+        keys.formUnion(playlists.compactMap(\.artworkKey))
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: Self.artworkFolder.path)) ?? [] where !keys.contains((name as NSString).deletingPathExtension) {
+            try? FileManager.default.removeItem(at: Self.artworkFolder.appendingPathComponent(name))
+        }
         lastSync = Date()
         lastSyncSource = manifest.sourceName
         saveNow()
@@ -428,6 +515,7 @@ final class MobileLibrary: ObservableObject {
         var summary = "\(availableSongs.count) songs on \(UIDevice.current.name)"
         if !removed.isEmpty { summary += " · \(removed.count) removed" }
         if missing > 0 { summary += " · \(missing) still missing" }
+        if damaged > 0 { summary += " · \(damaged) damaged, will resend" }
         return summary
     }
 

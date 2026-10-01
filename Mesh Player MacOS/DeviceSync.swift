@@ -341,6 +341,9 @@ final class DeviceSyncController: ObservableObject {
             switch try await channel.nextMessage() {
             case .hello(let hello):
                 deviceName = hello.name
+                guard hello.version >= MeshSync.protocolVersion else {
+                    throw SyncError.protocolError("Mesh Player on \(hello.name) is out of date. Install the latest version on the iPhone, then sync again.")
+                }
                 if usbDevice.isUSB, let idx = usbDevices.firstIndex(where: { $0.id == usbDevice.id }) {
                     usbDevices[idx].name = hello.name
                     publishDevices()
@@ -359,26 +362,41 @@ final class DeviceSyncController: ObservableObject {
         guard let inventory else { throw SyncError.closed }
         phase = .preparing
 
-        // 1. Bring the iPhone's plays, favorites and playlists into the Mac library.
+        // 1. Songs added on the iPhone come to the Mac first: the Mac keeps everything.
+        let uploads = (inventory.localSongs ?? []).filter { state.track(withId: $0.id) == nil }
+        try await channel.send(.requestUploads(uploads.map(\.id.uuidString)))
+        try await receiveUploads(channel, songs: uploads, state: state)
+
+        // 2. Bring the iPhone's plays, favorites and playlists into the Mac library.
         state.mergeSyncChanges(inventory)
         // Playlists made on the iPhone stay on it even when only selected playlists are synced.
         if scope == .playlists {
             for playlist in inventory.playlists where !playlist.isSmart { selectedPlaylists.insert(playlist.id) }
         }
 
-        // 2. Decide what the iPhone should hold.
+        // 3. Decide what the iPhone should hold.
         let manifest = makeManifest(state: state)
         try await channel.send(.manifest(manifest))
 
-        // 3. Send what's missing.
+        // 4. Send what's missing, or what's on the iPhone at the wrong size (cut-off or damaged).
         let byId = Dictionary(uniqueKeysWithValues: state.tracks.map { ($0.id, $0) })
         let audio = manifest.tracks.filter { inventory.files[$0.id.uuidString] != $0.fileSize }
-        let haveArt = Set(inventory.artworkKeys)
+        // Covers count as present only when the file isn't empty.
+        let haveArt: Set<String> = inventory.artworkSizes.map { sizes in Set(sizes.filter { $0.value > 0 }.keys) } ?? Set(inventory.artworkKeys)
         var artworkTracks: [String: LocalTrack] = [:]
         for synced in manifest.tracks where !haveArt.contains(synced.artworkKey) && artworkTracks[synced.artworkKey] == nil {
             artworkTracks[synced.artworkKey] = byId[synced.id]
         }
-        filesTotal = audio.count + artworkTracks.count
+        // Albums with no cover at all would otherwise be "missing" on every sync.
+        for (key, track) in artworkTracks where !(await ArtworkStore.shared.hasArtwork(for: track)) { artworkTracks[key] = nil }
+        // Custom playlist covers.
+        var playlistCovers: [String: URL] = [:]
+        for playlist in manifest.playlists {
+            guard let key = playlist.artworkKey, !haveArt.contains(key),
+                  let local = state.playlists.first(where: { $0.id == playlist.id }), let url = state.playlistArtworkURL(local) else { continue }
+            playlistCovers[key] = url
+        }
+        filesTotal = audio.count + artworkTracks.count + playlistCovers.count
         bytesTotal = audio.reduce(0) { $0 + $1.fileSize }
         let free = inventory.freeSpace ?? .max
         if bytesTotal > free {
@@ -392,6 +410,14 @@ final class DeviceSyncController: ObservableObject {
         for (key, track) in artworkTracks {
             try Task.checkCancellation()
             guard let data = await ArtworkStore.shared.jpegData(for: track, maxPixel: 800) else { filesDone += 1; continue }
+            try await channel.send(.fileBegin(SyncFileHeader(kind: .artwork, id: key, fileExtension: "jpg", size: Int64(data.count))))
+            try await channel.sendChunk(data)
+            try await channel.send(.fileEnd)
+            filesDone += 1
+        }
+        for (key, url) in playlistCovers {
+            try Task.checkCancellation()
+            guard let data = try? Data(contentsOf: url) else { filesDone += 1; continue }
             try await channel.send(.fileBegin(SyncFileHeader(kind: .artwork, id: key, fileExtension: "jpg", size: Int64(data.count))))
             try await channel.sendChunk(data)
             try await channel.send(.fileEnd)
@@ -412,6 +438,71 @@ final class DeviceSyncController: ObservableObject {
         while true {
             if case .complete(let summary) = try await channel.nextMessage() { return summary }
         }
+    }
+
+    /// Receives the songs the iPhone added itself and adds them to the Mac library (same ids, so
+    /// the iPhone keeps its plays and playlists for them).
+    private func receiveUploads(_ channel: SyncChannel, songs: [SyncTrack], state: AppStateManager) async throws {
+        let folder = LibraryManager.shared.mediaDirectory.appendingPathComponent("From iPhone", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var pending = Dictionary(uniqueKeysWithValues: songs.map { ($0.id, Self.localTrack(from: $0)) })
+        var received: [LocalTrack] = []
+        var current: (header: SyncFileHeader, url: URL?, handle: FileHandle?, data: Data)?
+        if !songs.isEmpty { currentItem = "Receiving \(songs.count) song\(songs.count == 1 ? "" : "s") from \(deviceName)" }
+        while true {
+            switch try await channel.next() {
+            case .message(.fileBegin(let header)):
+                if header.kind == .audio, let id = UUID(uuidString: header.id) {
+                    let url = folder.appendingPathComponent(id.uuidString + "." + header.fileExtension)
+                    FileManager.default.createFile(atPath: url.path, contents: nil)
+                    current = (header, url, try FileHandle(forWritingTo: url), Data())
+                } else {
+                    current = (header, nil, nil, Data())
+                }
+            case .chunk(let data):
+                if let handle = current?.handle { try handle.write(contentsOf: data) } else { current?.data.append(data) }
+            case .message(.fileEnd):
+                guard let file = current, let id = UUID(uuidString: file.header.id), var track = pending[id] else { current = nil; break }
+                try? file.handle?.close()
+                if file.header.kind == .audio, let url = file.url {
+                    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 } ?? 0
+                    if Int64(size) == file.header.size {
+                        track.fileURL = url
+                        pending[id] = track
+                        received.append(track)
+                    } else {
+                        try? FileManager.default.removeItem(at: url)
+                    }
+                } else if !file.data.isEmpty {
+                    ArtworkStore.shared.store(file.data, forKey: track.artworkKey, overwrite: false)
+                }
+                current = nil
+            case .message(.uploadsDone):
+                if !received.isEmpty { state.tracks.append(contentsOf: received) }
+                return
+            default:
+                break
+            }
+        }
+    }
+
+    private static func localTrack(from s: SyncTrack) -> LocalTrack {
+        var t = LocalTrack(title: s.title, artist: s.artist, album: s.album, genre: s.genre, duration: s.duration, fileURL: nil,
+                           coverImageName: "music.note", dateAdded: s.dateAdded, isAtmos: s.isAtmos,
+                           fileSize: ByteCountFormatter.string(fromByteCount: s.fileSize, countStyle: .file), lyrics: s.lyrics)
+        t.id = s.id
+        t.isFavorite = s.isFavorite
+        t.playCount = s.playCount
+        t.lastPlayedDate = s.lastPlayedDate
+        t.format = s.format
+        t.discNumber = s.discNumber
+        t.trackNumber = s.trackNumber
+        t.copyright = s.copyright
+        t.year = s.year
+        t.bitDepth = s.bitDepth
+        t.sampleRate = s.sampleRate
+        t.albumArtist = s.albumArtist
+        return t
     }
 
     private func makeManifest(state: AppStateManager) -> SyncManifest {
@@ -439,15 +530,43 @@ final class DeviceSyncController: ObservableObject {
         let playlists: [SyncPlaylist] = chosenPlaylists.map { p in
             SyncPlaylist(id: p.id, name: p.name, description: p.description,
                          trackIds: state.resolvedTracks(of: p).map(\.id).filter { included.contains($0) },
-                         isSmart: p.isSmart, isFavorites: p.isAppleMusicFavorites, dateModified: p.dateModified)
+                         isSmart: p.isSmart, isFavorites: p.isAppleMusicFavorites, dateModified: p.dateModified,
+                         artworkKey: p.artworkFileName == nil ? nil : "playlist-" + p.id.uuidString)
         }
-        return SyncManifest(tracks: tracks, playlists: playlists, sourceName: Host.current().localizedName ?? "Mac")
+        // The Mac decides these for both devices.
+        let settings = SyncSettings(
+            themeName: state.currentThemeName,
+            mergeCollaborations: state.mergeCollaborationArtists,
+            hiddenTrackIds: trackSet.filter { state.isHiddenFromLibrary($0.id) }.map(\.id),
+            favoriteArtists: Array(state.favoriteArtists).sorted(),
+            animatedArtwork: state.animatedArtworkEnabled,
+            lastFM: LastFMService.shared.syncCredentials()
+        )
+        let history = state.playHistoryLog.suffix(50_000).map {
+            SyncPlayEvent(id: $0.id, trackId: $0.trackId, title: $0.title, artist: $0.artist, album: $0.album, genre: $0.genre, duration: $0.duration, timestamp: $0.timestamp)
+        }
+        return SyncManifest(tracks: tracks, playlists: playlists, sourceName: Host.current().localizedName ?? "Mac", settings: settings, playHistory: Array(history))
     }
 }
 
 extension AppStateManager {
     /// Applies plays, favorites and playlists changed on the iPhone.
     func mergeSyncChanges(_ inventory: SyncInventory) {
+        // Plays made on the iPhone, with their real times (older iPhone versions only sent counts).
+        var knownEvents = Set(playHistoryLog.map(\.id))
+        var events: [PlayLogEntry] = []
+        for e in inventory.playEvents ?? [] where knownEvents.insert(e.id).inserted {
+            events.append(PlayLogEntry(id: e.id, trackId: e.trackId, title: e.title, artist: e.artist, album: e.album, genre: e.genre, duration: e.duration, timestamp: e.timestamp))
+        }
+        if !events.isEmpty { playHistoryLog = (playHistoryLog + events).sorted { $0.timestamp < $1.timestamp } }
+        let synthesizeEntries = inventory.playEvents == nil
+
+        // Playlists made on the iPhone and then deleted there.
+        if let deleted = inventory.deletedPlaylists, !deleted.isEmpty {
+            let ids = Set(deleted)
+            playlists.removeAll { ids.contains($0.id) && $0.createdOnDevice != nil }
+        }
+
         if !inventory.changes.isEmpty {
             var updated = tracks
             var entries: [PlayLogEntry] = []
@@ -456,7 +575,7 @@ extension AppStateManager {
                 if change.playsSinceSync > 0 {
                     updated[i].playCount += change.playsSinceSync
                     let t = updated[i]
-                    for _ in 0..<min(change.playsSinceSync, 50) {
+                    for _ in 0..<(synthesizeEntries ? min(change.playsSinceSync, 50) : 0) {
                         entries.append(PlayLogEntry(trackId: t.id, title: t.title, artist: t.artist, album: t.album, genre: t.genre, duration: t.duration, timestamp: change.lastPlayed ?? Date()))
                     }
                 }
@@ -478,6 +597,7 @@ extension AppStateManager {
                 var playlist = Playlist(id: remote.id, name: remote.name, description: remote.description, isImported: false, playlistTracks: songs.map { PlaylistTrack(track: $0) })
                 playlist.dateCreated = Date()
                 playlist.dateModified = remote.dateModified
+                playlist.createdOnDevice = "iPhone"
                 playlists.append(playlist)
             }
         }
