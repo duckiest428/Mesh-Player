@@ -23,7 +23,16 @@ struct SearchView: View {
     @EnvironmentObject var library: MobileLibrary
     @EnvironmentObject var player: MobilePlayer
     @State private var query = ""
-    @State private var scope = 0
+    @State private var scope: Scope = .top
+
+    enum Scope: String, CaseIterable, Identifiable {
+        case top = "Top Results"
+        case albums = "Albums"
+        case songs = "Songs"
+        case artists = "Artists"
+        case playlists = "Playlists"
+        var id: String { rawValue }
+    }
 
     private static let tints: [Color] = [.pink, .orange, .purple, .blue, .teal, .indigo, .red, .green, .mint, .cyan]
 
@@ -52,72 +61,157 @@ struct SearchView: View {
             }
         }
         .navigationTitle("Search")
-        .searchable(text: $query, prompt: "Songs, Artists, Albums, Playlists")
-        .searchScopes($scope) {
-            Text("All").tag(0)
-            Text("Songs").tag(1)
-            Text("Albums").tag(2)
-            Text("Artists").tag(3)
-        }
+        .searchable(text: $query, prompt: "Search Your Library")
         .libraryDestinations()
     }
 
+    // MARK: Results
+
+    enum Item: Identifiable {
+        case song(Song), album(MobileAlbum), artist(MobileArtist), playlist(MobilePlaylist)
+
+        var id: String {
+            switch self {
+            case .song(let s): return "s" + s.id.uuidString
+            case .album(let a): return "a" + a.key
+            case .artist(let a): return "r" + a.name
+            case .playlist(let p): return "p" + p.id.uuidString
+            }
+        }
+    }
+
     private var results: some View {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        let songs = library.availableSongs.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.artist.localizedCaseInsensitiveContains(q) || $0.album.localizedCaseInsensitiveContains(q) }
-        let albums = library.albums.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.artist.localizedCaseInsensitiveContains(q) }
-        let artists = library.artists.filter { $0.name.localizedCaseInsensitiveContains(q) }
-        let playlists = library.playlists.filter { $0.name.localizedCaseInsensitiveContains(q) }
-        return List {
-            if scope == 0 || scope == 3, !artists.isEmpty {
-                Section("Artists") {
-                    ForEach(artists.prefix(scope == 0 ? 3 : 100)) { artist in
-                        NavigationLink(value: artist) {
-                            HStack(spacing: 12) {
-                                ArtworkImage(key: artist.songs.first?.artworkKey, size: 44, cornerRadius: 22, seed: artist.name).frame(width: 44, height: 44)
-                                Text(artist.name)
-                            }
+        let ranked = rankedItems(query.trimmingCharacters(in: .whitespaces))
+        let shown = ranked.filter { item in
+            switch (scope, item) {
+            case (.top, _): return true
+            case (.albums, .album), (.songs, .song), (.artists, .artist), (.playlists, .playlist): return true
+            default: return false
+            }
+        }
+        let songs: [Song] = shown.compactMap { if case .song(let s) = $0 { return s } else { return nil } }
+        return VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Scope.allCases) { option in
+                        Button { withAnimation(.snappy) { scope = option } } label: {
+                            Text(option.rawValue)
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(scope == option ? .white : .primary)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(scope == option ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+            Divider()
+            List {
+                ForEach(Array((scope == .top ? Array(shown.prefix(60)) : shown).enumerated()), id: \.element.id) { _, item in
+                    SearchResultRow(item: item, playQueue: songs)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 16))
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
+                }
+            }
+            .listStyle(.plain)
+            .overlay {
+                if shown.isEmpty { ContentUnavailableView.search(text: query) }
+            }
+        }
+    }
+
+    /// Library matches, best first: the name starts with the query, then a word in it does,
+    /// then it appears anywhere; albums and artists before songs on ties.
+    private func rankedItems(_ q: String) -> [Item] {
+        let lower = q.lowercased()
+        func rank(_ text: String) -> Int? {
+            let t = text.lowercased()
+            if t.hasPrefix(lower) { return 0 }
+            if t.contains(" " + lower) || t.contains("(" + lower) { return 1 }
+            return t.contains(lower) ? 2 : nil
+        }
+        var scored: [(Item, Int)] = []
+        for artist in library.artists { if let r = rank(artist.name) { scored.append((.artist(artist), r * 10)) } }
+        for album in library.albums {
+            if let r = rank(album.title) { scored.append((.album(album), r * 10 + 1)) }
+            else if let r = rank(album.artist) { scored.append((.album(album), 30 + r * 10 + 1)) }
+        }
+        for song in library.availableSongs {
+            if let r = rank(song.title) { scored.append((.song(song), r * 10 + 2)) }
+            else if let r = rank(song.artist) ?? rank(song.album) { scored.append((.song(song), 30 + r * 10 + 2)) }
+        }
+        for playlist in library.playlists { if let r = rank(playlist.name) { scored.append((.playlist(playlist), r * 10 + 3)) } }
+        return scored.sorted { $0.1 < $1.1 }.map(\.0)
+    }
+}
+
+/// One search result, laid out like Apple Music's: cover, title, "Kind · Artist", and a chevron
+/// (albums, artists, playlists) or ••• menu (songs).
+private struct SearchResultRow: View {
+    let item: SearchView.Item
+    let playQueue: [Song]
+    @EnvironmentObject var library: MobileLibrary
+    @EnvironmentObject var player: MobilePlayer
+
+    var body: some View {
+        switch item {
+        case .song(let song):
+            HStack(spacing: 14) {
+                ArtworkImage(key: song.artworkKey, size: 64, cornerRadius: 6, seed: song.album).frame(width: 64, height: 64)
+                text(song.title, "Song · \(song.artist)")
+                Spacer(minLength: 4)
+                Menu { SongMenu(songs: [song]) } label: {
+                    Image(systemName: "ellipsis").font(.body.weight(.semibold)).foregroundStyle(.primary).frame(width: 34, height: 34)
+                }
+                .tint(.primary)
+            }
+            .overlay(alignment: .leading) {
+                if song.isFavorite {
+                    Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow).offset(x: -16)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { player.play(playQueue, startAt: song) }
+            .contextMenu { SongMenu(songs: [song]) }
+        case .album(let album):
+            NavigationLink(value: album) {
+                HStack(spacing: 14) {
+                    ArtworkImage(key: album.representative.artworkKey, size: 64, cornerRadius: 6, seed: album.title).frame(width: 64, height: 64)
+                    text(album.title, "Album · \(album.artist)")
+                }
+            }
+            .contextMenu { SongMenu(songs: album.songs) }
+        case .artist(let artist):
+            NavigationLink(value: artist) {
+                HStack(spacing: 14) {
+                    ArtworkImage(key: artist.songs.first?.artworkKey, size: 64, cornerRadius: 32, seed: artist.name).frame(width: 64, height: 64)
+                    text(artist.name, "Artist")
+                }
+            }
+        case .playlist(let playlist):
+            NavigationLink(value: playlist) {
+                HStack(spacing: 14) {
+                    Group {
+                        if let key = playlist.artworkKey {
+                            ArtworkImage(key: key, size: 64, cornerRadius: 6, seed: playlist.name)
+                        } else {
+                            PlaylistCoverView(songs: library.songs(of: playlist), isFavorites: playlist.isFavorites)
                         }
                     }
-                }
-            }
-            if scope == 0 || scope == 2, !albums.isEmpty {
-                Section("Albums") {
-                    ForEach(albums.prefix(scope == 0 ? 4 : 200)) { album in
-                        NavigationLink(value: album) {
-                            HStack(spacing: 12) {
-                                ArtworkImage(key: album.representative.artworkKey, size: 48, cornerRadius: 6, seed: album.title).frame(width: 48, height: 48)
-                                VStack(alignment: .leading) {
-                                    Text(album.title).lineLimit(1)
-                                    Text(album.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if scope == 0, !playlists.isEmpty {
-                Section("Playlists") {
-                    ForEach(playlists) { playlist in
-                        NavigationLink(value: playlist) { Label(playlist.name, systemImage: "music.note.list") }
-                    }
-                }
-            }
-            if scope == 0 || scope == 1, !songs.isEmpty {
-                Section("Songs") {
-                    ForEach(songs.prefix(scope == 0 ? 25 : 500)) { song in
-                        Button { player.play(songs, startAt: song) } label: { SongRow(song: song) }
-                            .buttonStyle(.plain)
-                            .contextMenu { SongMenu(songs: [song]) }
-                    }
+                    .frame(width: 64, height: 64)
+                    text(playlist.name, "Playlist")
                 }
             }
         }
-        .listStyle(.plain)
-        .overlay {
-            if songs.isEmpty && albums.isEmpty && artists.isEmpty && playlists.isEmpty {
-                ContentUnavailableView.search(text: q)
-            }
+    }
+
+    private func text(_ title: String, _ subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.title3).lineLimit(1)
+            Text(subtitle).font(.body).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 }
