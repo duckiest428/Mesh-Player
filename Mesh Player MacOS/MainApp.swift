@@ -166,10 +166,9 @@ struct DetailRouter: View {
             if state.activeFilterType != nil {
                 HStack {
                     Button {
-                        state.activeFilterType = nil
-                        state.activeFilterValue = nil
+                        state.goBack()
                     } label: {
-                        Label(backTitle(for: tab), systemImage: "chevron.left")
+                        Label(state.backTitle, systemImage: "chevron.left")
                     }
                     .buttonStyle(PillButtonStyle(kind: .ghost, theme: theme, compact: true))
                     Spacer()

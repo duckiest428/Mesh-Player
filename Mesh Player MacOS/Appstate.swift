@@ -358,15 +358,101 @@ class AppStateManager: ObservableObject {
             activeFilterType = nil
             activeFilterValue = nil
             if !preserveSearchOnNavigation { searchKeyword = "" }
+            // Picking something in the sidebar starts a fresh trail.
+            if !isDrillingDown { backStack = [] }
         }
     }
     private var preserveSearchOnNavigation = false
+
+    /// A page reached by drilling down (album, artist, "See All" lists, search results).
+    struct DetailLocation: Equatable {
+        var tab: String?
+        var filterType: String?
+        var filterValue: String?
+        var search: String
+    }
+
+    /// Where Back goes: the pages visited before the current drill-down page.
+    @Published private(set) var backStack: [DetailLocation] = []
+    private var isDrillingDown = false
+
+    private var currentLocation: DetailLocation {
+        DetailLocation(tab: selectedTab, filterType: activeFilterType, filterValue: activeFilterValue, search: searchKeyword)
+    }
+
+    /// Opens a drill-down page, remembering the current page so Back returns to it.
+    func open(tab: String, filter type: String, value: String) {
+        let from = currentLocation
+        if from != DetailLocation(tab: tab, filterType: type, filterValue: value, search: from.search) { backStack.append(from) }
+        isDrillingDown = true
+        selectedTab = tab
+        isDrillingDown = false
+        activeFilterType = type
+        activeFilterValue = value
+    }
+
+    /// Back from a drill-down page.
+    func goBack() {
+        guard let previous = backStack.popLast() else {
+            activeFilterType = nil
+            activeFilterValue = nil
+            return
+        }
+        isDrillingDown = true
+        preserveSearchOnNavigation = true
+        selectedTab = previous.tab
+        preserveSearchOnNavigation = false
+        isDrillingDown = false
+        activeFilterType = previous.filterType
+        activeFilterValue = previous.filterValue
+        if searchKeyword != previous.search { searchKeyword = previous.search }
+    }
+
+    /// Title for the Back button.
+    var backTitle: String {
+        guard let previous = backStack.last else { return Self.tabTitle(selectedTab) }
+        if previous.tab == "search" && previous.filterType == nil { return "Search" }
+        if let value = previous.filterValue {
+            if previous.filterType == "artistSection" || previous.filterType == "searchSection" {
+                return value.components(separatedBy: "\u{1}").last ?? "Back"
+            }
+            return value
+        }
+        if let tab = previous.tab, tab.hasPrefix("playlist-"),
+           let playlist = playlists.first(where: { "playlist-\($0.id.uuidString)" == tab }) {
+            return playlist.name
+        }
+        return Self.tabTitle(previous.tab)
+    }
+
+    static func tabTitle(_ tab: String?) -> String {
+        switch tab {
+        case "albums": return "Albums"
+        case "artists": return "Artists"
+        case "genres": return "Genres"
+        case "songs": return "All Songs"
+        case "recently-added": return "Recently Added"
+        case "allPlaylists": return "All Playlists"
+        case "search": return "Search"
+        case "home": return "Home"
+        case "getMusic": return "Get Music"
+        case "meshReplay": return "Mesh Replay"
+        default: return "Back"
+        }
+    }
+
+    /// A search for Get Music to run when it opens.
+    @Published var getMusicQuery: String?
+
+    /// Favorite artists (the heart on an artist's page).
+    @Published var favoriteArtists: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "favoriteArtists") ?? []) {
+        didSet { UserDefaults.standard.set(Array(favoriteArtists).sorted(), forKey: "favoriteArtists") }
+    }
 
     @Published var activeQueue: [LocalTrack] = []
     @Published var unshuffleQueue: [LocalTrack] = []
     @Published var isQueueShuffled: Bool = false
     @Published var repeatMode: Int = 0 // 0 = off, 1 = all, 2 = one
-    @Published var removePlaylistSongsFromLibrary: Bool = false { didSet { persist(removePlaylistSongsFromLibrary, "removePlaylistSongsFromLibrary") } }
 
     // Album Sorting
     enum AlbumSortCriteria: String, CaseIterable {
@@ -425,21 +511,15 @@ class AppStateManager: ObservableObject {
     }
 
     func showAlbum(_ name: String) {
-        selectedTab = "albums"
-        activeFilterType = "album"
-        activeFilterValue = name
+        open(tab: "albums", filter: "album", value: name)
     }
 
     func showArtist(_ name: String) {
-        selectedTab = "artists"
-        activeFilterType = "artist"
-        activeFilterValue = name
+        open(tab: "artists", filter: "artist", value: name)
     }
 
     func showGenre(_ name: String) {
-        selectedTab = "genres"
-        activeFilterType = "genre"
-        activeFilterValue = name
+        open(tab: "genres", filter: "genre", value: name)
     }
 
     // Manage active queue tracking
