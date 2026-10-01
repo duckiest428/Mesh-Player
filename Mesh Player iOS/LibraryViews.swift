@@ -15,13 +15,8 @@ struct LibraryHomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
-                    row("Playlists", icon: "music.note.list") { PlaylistsView() }
-                    row("Artists", icon: "music.microphone") { ArtistsView() }
-                    row("Albums", icon: "square.stack") { AlbumsView() }
-                    row("Songs", icon: "music.note") { SongsView(title: "Songs", songs: nil) }
-                    row("Genres", icon: "guitars") { GenresView() }
-                    row("Favorites", icon: "star") {
-                        if let favorites = library.playlists.first(where: \.isFavorites) { PlaylistView(playlistId: favorites.id) }
+                    ForEach(LibraryRoute.allCases, id: \.self) { route in
+                        row(route)
                     }
                 }
                 .padding(.horizontal)
@@ -51,23 +46,63 @@ struct LibraryHomeView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
     }
 
-    private func row<Destination: View>(_ title: String, icon: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
-        NavigationLink(destination: destination) {
+    private func row(_ route: LibraryRoute) -> some View {
+        NavigationLink(value: route) {
             VStack(spacing: 0) {
                 HStack(spacing: 14) {
-                    Image(systemName: icon)
+                    Image(systemName: route.icon)
                         .font(.title3)
                         .foregroundStyle(.tint)
                         .frame(width: 30)
-                    Text(title).font(.title3).foregroundStyle(.primary)
+                    Text(route.title).font(.title3).foregroundStyle(.primary)
                     Spacer()
                     Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 .padding(.vertical, 12)
+                .contentShape(Rectangle())
                 Divider().padding(.leading, 44)
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The category rows at the top of Library.
+enum LibraryRoute: String, CaseIterable, Hashable {
+    case playlists, artists, albums, songs, genres, favorites
+
+    var title: String { rawValue.capitalized }
+
+    var icon: String {
+        switch self {
+        case .playlists: return "music.note.list"
+        case .artists: return "music.microphone"
+        case .albums: return "square.stack"
+        case .songs: return "music.note"
+        case .genres: return "guitars"
+        case .favorites: return "star"
+        }
+    }
+}
+
+struct LibraryRouteView: View {
+    let route: LibraryRoute
+    @EnvironmentObject var library: MobileLibrary
+
+    var body: some View {
+        switch route {
+        case .playlists: PlaylistsView()
+        case .artists: ArtistsView()
+        case .albums: AlbumsView()
+        case .songs: SongsView(title: "Songs", songs: nil)
+        case .genres: GenresView()
+        case .favorites:
+            if let favorites = library.playlists.first(where: \.isFavorites) {
+                PlaylistView(playlistId: favorites.id)
+            } else {
+                ContentUnavailableView("No Favorites", systemImage: "star")
+            }
+        }
     }
 }
 

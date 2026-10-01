@@ -13,6 +13,7 @@ extension View {
             .navigationDestination(for: MobileAlbum.self) { AlbumView(album: $0) }
             .navigationDestination(for: MobileArtist.self) { ArtistView(artist: $0) }
             .navigationDestination(for: MobilePlaylist.self) { PlaylistView(playlistId: $0.id) }
+            .navigationDestination(for: LibraryRoute.self) { LibraryRouteView(route: $0) }
     }
 }
 
