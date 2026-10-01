@@ -223,23 +223,56 @@ struct ArtworkViewerSheet: View {
     @State private var square: URL?
     @State private var tall: URL?
     @State private var lookedUp = false
+    @State private var showControls = true
 
     private var modes: [Mode] {
         [.still] + (square != nil ? [.square] : []) + (tall != nil ? [.tall] : [])
     }
 
+    /// The sheet is exactly the artwork's size: square for stills and square motion art, 3:4 for tall.
+    private var artSize: CGSize {
+        let screen = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900)
+        let height = min(760, screen.height - 120)
+        return mode == .tall ? CGSize(width: height * 3 / 4, height: height) : CGSize(width: height, height: height)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 15, weight: .bold)).lineLimit(1)
-                    Text(lookedUp ? (modes.count > 1 ? "Motion artwork available" : "No motion artwork for this album") : "Looking for motion artwork…")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(theme.textSecondary)
+        ZStack {
+            switch mode {
+            case .still:
+                ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
+            case .square:
+                if let square {
+                    // The still sits underneath until the first video frame is ready.
+                    ZStack {
+                        ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
+                        LoopingVideoView(url: square)
+                    }
                 }
-                Spacer()
+            case .tall:
+                if let tall {
+                    ZStack {
+                        ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
+                            .blur(radius: 30)
+                        LoopingVideoView(url: tall)
+                    }
+                }
+            }
+        }
+        .frame(width: artSize.width, height: artSize.height)
+        .clipped()
+        .overlay(alignment: .top) {
+            // Controls float over the artwork and fade in on hover.
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 14, weight: .bold)).lineLimit(1)
+                    Text(lookedUp ? (modes.count > 1 ? "Motion artwork available" : "No motion artwork") : "Looking for motion artwork…")
+                        .font(.system(size: 11))
+                        .opacity(0.75)
+                }
+                Spacer(minLength: 8)
                 if modes.count > 1 {
-                    Picker("", selection: $mode) {
+                    Picker("", selection: $mode.animation(.easeInOut(duration: 0.3))) {
                         ForEach(modes) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
@@ -249,39 +282,16 @@ struct ArtworkViewerSheet: View {
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
-            .padding(16)
-
-            ZStack {
-                Color.black
-                switch mode {
-                case .still:
-                    ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
-                        .aspectRatio(1, contentMode: .fit)
-                case .square:
-                    if let square {
-                        // The still sits underneath until the first video frame is ready.
-                        ZStack {
-                            ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
-                            LoopingVideoView(url: square)
-                        }
-                        .aspectRatio(1, contentMode: .fit)
-                    }
-                case .tall:
-                    if let tall {
-                        ZStack {
-                            ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
-                                .blur(radius: 30)
-                            LoopingVideoView(url: tall)
-                        }
-                        .aspectRatio(3.0 / 4.0, contentMode: .fit)
-                        .clipped()
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 28)
+            .background(LinearGradient(colors: [.black.opacity(0.65), .black.opacity(0)], startPoint: .top, endPoint: .bottom))
+            .environment(\.colorScheme, .dark)
+            .opacity(showControls ? 1 : 0)
         }
-        .frame(minWidth: 640, idealWidth: 760, minHeight: 700, idealHeight: 860)
-        .background(theme.background)
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.2)) { showControls = hovering } }
+        .background(Color.black)
         .task {
             let videos = await AnimatedArtworkService.shared.videos(key: track.artworkKey, album: track.album, artist: track.albumArtist ?? track.artist,
                                                                     localFolder: track.fileURL?.deletingLastPathComponent())
