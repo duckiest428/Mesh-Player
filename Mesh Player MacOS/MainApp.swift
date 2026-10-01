@@ -42,6 +42,18 @@ struct macOSMusicPlayerContentView: View {
                     }
                     .contentZoom()
                     .background(theme.background)
+                    .toolbar {
+                        // Back sits at the top left of the page, in the window's title bar, like Apple Music.
+                        ToolbarItem(placement: .navigation) {
+                            Button {
+                                state.goBack()
+                            } label: {
+                                Image(systemName: "chevron.left")
+                            }
+                            .disabled(state.activeFilterType == nil)
+                            .help(state.activeFilterType == nil ? "Back" : "Back to \(state.backTitle)")
+                        }
+                    }
                     .ignoresSafeArea(.container, edges: .top)
                 }
                 .toolbar(state.showFullscreenPlayer ? .hidden : .automatic, for: .windowToolbar)
@@ -179,26 +191,11 @@ struct DetailRouter: View {
         let theme = state.theme
         let tab = state.selectedTab ?? "home"
 
-        VStack(spacing: 0) {
-            if state.activeFilterType != nil {
-                HStack {
-                    Button {
-                        state.goBack()
-                    } label: {
-                        Label(state.backTitle, systemImage: "chevron.left")
-                    }
-                    .buttonStyle(PillButtonStyle(kind: .ghost, theme: theme, compact: true))
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 14)
-                .padding(.bottom, 2)
-            }
-
-            content(tab: tab)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .background(theme.background)
+        content(tab: tab)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Drill-down pages start below the title bar's Back button.
+            .padding(.top, state.activeFilterType != nil ? 30 : 0)
+            .background(theme.background)
     }
 
     @ViewBuilder
@@ -959,6 +956,10 @@ struct macOSMusicPlayerApp: App {
             }
 
             CommandGroup(replacing: .toolbar) {
+                Button("Back") { state.goBack() }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(state.activeFilterType == nil)
+                Divider()
                 // The key monitor in AppDelegate handles these shortcuts (so ⌘= works as ⌘+ too).
                 Button("Zoom In") { ContentZoom.zoomIn() }
                     .keyboardShortcut("+", modifiers: .command)
