@@ -32,6 +32,8 @@ nonisolated struct CatalogArtistInfo: Codable, Hashable, Sendable {
     var bio: String?
     var url: String?
     var essentialAlbums: [CatalogAlbumInfo]
+    /// Titles of the artist's top songs on Apple Music, most popular first.
+    var topSongs: [String]? = nil
 
     func artworkURL(_ size: Int) -> URL? { AppleMusicCatalog.imageURL(artworkTemplate, size: size) }
     func bannerURL(width: Int) -> URL? { AppleMusicCatalog.imageURL(bannerTemplate, width: width, height: width * 9 / 32) }
@@ -93,7 +95,8 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
 
     func artist(named name: String) async -> CatalogArtistInfo? {
         let key = Self.artistKey(name)
-        if let hit = lock.withLock({ cache.artists[key] }), hit.isFresh { return hit.value }
+        // Entries cached before top songs were looked up are refreshed once.
+        if let hit = lock.withLock({ cache.artists[key] }), hit.isFresh, hit.value == nil || hit.value?.topSongs != nil { return hit.value }
         await once("artist:" + key) { [self] in
             let found = await lookUpArtist(name)
             lock.withLock { cache.artists[key] = Stamped(value: found, checked: Date()) }
@@ -153,7 +156,7 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
               let id = item["id"] as? String else { return nil }
 
         var artist = Self.artist(from: item) ?? CatalogArtistInfo(id: id, name: name, essentialAlbums: [])
-        if let detail = await get("artists/\(id)", query: ["views": "featured-albums", "extend": "artistBio,editorialArtwork"]),
+        if let detail = await get("artists/\(id)", query: ["views": "featured-albums,top-songs", "extend": "artistBio,editorialArtwork"]),
            let data = (detail["data"] as? [[String: Any]])?.first {
             if let full = Self.artist(from: data) {
                 artist.bio = full.bio ?? artist.bio
@@ -163,6 +166,8 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
             let views = data["views"] as? [String: Any]
             let featured = (views?["featured-albums"] as? [String: Any])?["data"] as? [[String: Any]] ?? []
             artist.essentialAlbums = featured.compactMap(Self.album(from:))
+            let top = (views?["top-songs"] as? [String: Any])?["data"] as? [[String: Any]] ?? []
+            artist.topSongs = top.compactMap { ($0["attributes"] as? [String: Any])?["name"] as? String }
         }
         return artist
     }
