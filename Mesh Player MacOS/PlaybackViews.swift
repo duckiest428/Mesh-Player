@@ -618,23 +618,22 @@ struct FullLyricsView: View {
                 .overlay(Color.black.opacity(0.28))
                 .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                topBar(effectiveRightPanel)
-
+            // The top bar floats over the content so the player is centred in the whole window.
+            ZStack(alignment: .top) {
                 GeometryReader { geo in
-                HStack(spacing: geo.size.width < 1000 ? 36 : 64) {
-                    if effectiveRightPanel == .none { Spacer(minLength: 0) }
-
+                // With a panel open the window splits into two equal halves and the player sits
+                // centred in the left one, like Apple Music; otherwise it's centred in the window.
+                HStack(spacing: 0) {
                     playerColumn(theme, art: Self.artworkSize(for: geo.size, hasPanel: effectiveRightPanel != .none))
+                        .frame(maxWidth: .infinity)
 
-                    if effectiveRightPanel == .none {
-                        Spacer(minLength: 0)
-                    } else {
+                    if effectiveRightPanel != .none {
                         Group {
                             switch effectiveRightPanel {
                             case .lyrics:
                                 FullLyricsList(engine: engine, timeTracker: timeTracker)
                                     .frame(maxWidth: 560)
+                                    .frame(maxWidth: .infinity)
                             case .queue:
                                 QueueSidebarView(state: state, engine: engine, isFullscreen: true)
                                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -647,14 +646,17 @@ struct FullLyricsView: View {
                                 EmptyView()
                             }
                         }
+                        .frame(maxWidth: .infinity)
                         .transition(.opacity.combined(with: .offset(x: 80)).combined(with: .scale(scale: 0.97, anchor: .trailing)))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .padding(.horizontal, 56)
-                .padding(.bottom, 28)
+                .padding(.vertical, 28)
                 .animation(.spring(response: 0.5, dampingFraction: 0.86), value: effectiveRightPanel)
+
+                topBar(effectiveRightPanel)
             }
         }
         .environment(\.colorScheme, .dark)
@@ -731,11 +733,11 @@ struct FullLyricsView: View {
         .padding(.bottom, 8)
     }
 
-    /// Artwork size that fits the window: the controls below it need about 320 pt, and with a
-    /// side panel open the player gets roughly half the width.
+    /// Artwork size as Apple Music sizes it: a bit under half the window's height, leaving room
+    /// for the controls, and no more than about 70% of the player's half when a panel is open.
     static func artworkSize(for size: CGSize, hasPanel: Bool) -> CGFloat {
-        let columnWidth = hasPanel ? (size.width - 64) * 0.48 : size.width
-        return max(180, min(columnWidth, size.height - 320, 640))
+        let columnWidth = hasPanel ? size.width / 2 * 0.7 : size.width * 0.6
+        return max(180, min(columnWidth, size.height * 0.5, 560))
     }
 
     private func playerColumn(_ theme: ThemeColor, art: CGFloat) -> some View {
@@ -772,7 +774,7 @@ struct FullLyricsView: View {
                 .animation(.spring(response: 0.55, dampingFraction: 0.85), value: engine.currentTrack?.id)
             }
             .buttonStyle(.plain)
-            .scaleEffect(engine.isPlaying ? (hoveringArt ? 1.015 : 1.0) : 0.86)
+            .scaleEffect(engine.isPlaying ? (hoveringArt ? 1.015 : 1.0) : 0.95)
             .shadow(color: .black.opacity(engine.isPlaying ? 0.5 : 0.25), radius: engine.isPlaying ? 40 : 16, y: engine.isPlaying ? 22 : 6)
             .animation(.spring(response: 0.55, dampingFraction: 0.68), value: engine.isPlaying)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hoveringArt)
