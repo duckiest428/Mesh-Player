@@ -40,7 +40,6 @@ struct macOSMusicPlayerContentView: View {
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
-                    .contentZoom()
                     .background(theme.background)
                     .ignoresSafeArea(.container, edges: .top)
                     .overlay(alignment: .topLeading) {
@@ -222,11 +221,25 @@ struct DetailRouter: View {
             .background(theme.background)
     }
 
+    /// Song tables (Songs, playlists) are AppKit tables underneath and are never zoomed: scaling
+    /// one made its rows re-measure endlessly and crashed the app. Every other page is zoomed.
     @ViewBuilder
     private func content(tab: String) -> some View {
-        if tab == "songs" || tab.hasPrefix("playlist-") {
+        if tab == "songs" || tab.hasPrefix("playlist-") || isTableFilter {
             SongTableView(state: state, engine: engine)
-        } else if let filter = state.activeFilterType, let value = state.activeFilterValue {
+        } else {
+            page(tab: tab).contentZoom()
+        }
+    }
+
+    private var isTableFilter: Bool {
+        guard let filter = state.activeFilterType else { return false }
+        return !["album", "artist", "genre", "genreSongs", "artistSection", "searchSection"].contains(filter)
+    }
+
+    @ViewBuilder
+    private func page(tab: String) -> some View {
+        if let filter = state.activeFilterType, let value = state.activeFilterValue {
             switch filter {
             case "album":
                 AlbumDetailView(state: state, engine: engine, albumName: value)
@@ -256,7 +269,7 @@ struct DetailRouter: View {
                         .id(value)
                 }
             default:
-                SongTableView(state: state, engine: engine)
+                EmptyView()
             }
         } else {
             switch tab {
@@ -1856,7 +1869,16 @@ enum ContentZoom {
 private struct ContentZoomModifier: ViewModifier {
     @AppStorage(ContentZoom.key) private var zoom = 1.0
 
+    @ViewBuilder
     func body(content: Content) -> some View {
+        if abs(zoom - 1) < 0.001 {
+            content
+        } else {
+            zoomed(content)
+        }
+    }
+
+    private func zoomed(_ content: Content) -> some View {
         // Lays the content out at size / zoom and scales it back up, so it reflows like a browser zoom.
         GeometryReader { geo in
             content
