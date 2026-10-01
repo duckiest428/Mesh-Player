@@ -1168,6 +1168,7 @@ struct SidebarView: View {
             }
 
             Section {
+                row("All Playlists", icon: "square.grid.2x2.fill", tag: "allPlaylists")
                 ForEach(state.playlists) { playlist in
                     playlistRow(playlist, theme: theme)
                 }
