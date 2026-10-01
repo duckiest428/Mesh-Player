@@ -250,6 +250,9 @@ struct SettingsView: View {
     @AppStorage("spatializeStereo") private var spatializeStereo = false
     @State private var showImporter = false
     @State private var confirmRemoveAll = false
+    @AppStorage("themeOverride") private var themeOverride = MeshTheme.followMac
+    @EnvironmentObject var player: MobilePlayer
+    @ObservedObject private var lastFM = MobileLastFM.shared
 
     var body: some View {
         NavigationStack {
@@ -270,7 +273,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Sync with Mac")
                 } footer: {
-                    Text("On your Mac, open Mesh Player and choose Add Music › Sync iPhone. Works over Wi-Fi or a USB cable. Plays, favorites and playlists you make here go back to the Mac.")
+                    Text("On your Mac, open Mesh Player and choose Add Music › Sync iPhone. Works over Wi-Fi or a USB cable. Your Mac is the main library: it sends its music and settings, and gets back plays, favorites, playlists and songs you added here.")
                 }
 
                 if !library.trustedMacs.isEmpty {
@@ -292,9 +295,56 @@ struct SettingsView: View {
                     Text("You can also drag songs onto Mesh Player in Finder › your iPhone › Files; they're added the next time the app opens.")
                 }
 
+                Section {
+                    Picker("Theme", selection: $themeOverride) {
+                        Text("Same as Mac\(library.settings.map { " (\($0.themeName))" } ?? "")").tag(MeshTheme.followMac)
+                        ForEach(ThemeCatalog.names, id: \.self) { Text($0).tag($0) }
+                    }
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("Follows the theme picked on your Mac unless you choose one here.")
+                }
+
                 Section("Playback") {
                     Toggle("Animated Artwork", isOn: $animatedArtwork)
                     Toggle("Spatialize Stereo", isOn: $spatializeStereo)
+                    Toggle("Autoplay When the Queue Ends", isOn: $player.autoplay)
+                    Toggle("Fade Between Songs", isOn: $player.crossfade)
+                }
+
+                Section {
+                    if lastFM.isConnected {
+                        LabeledContent("Account", value: lastFM.username ?? "")
+                        Toggle("Scrobble on This iPhone", isOn: $lastFM.enabledHere)
+                            .disabled(!lastFM.macEnabled)
+                        if !lastFM.pending.isEmpty {
+                            LabeledContent("Waiting to send", value: "\(lastFM.pending.count)")
+                            Button("Send Now") { lastFM.flushNow() }
+                        }
+                        if let last = lastFM.lastScrobbled { LabeledContent("Last scrobble", value: last) }
+                        if let error = lastFM.lastError { Text(error).font(.footnote).foregroundStyle(.orange) }
+                    } else {
+                        Text("Connect Last.fm in Mesh Player on your Mac (Settings › Last.fm), then sync. This iPhone scrobbles to the same account.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Last.fm")
+                } footer: {
+                    if lastFM.isConnected && !lastFM.macEnabled { Text("Scrobbling is turned off on your Mac.") }
+                }
+
+                if let settings = library.settings {
+                    Section {
+                        LabeledContent("Hidden from Library", value: "\(settings.hiddenTrackIds.count) songs")
+                        LabeledContent("Collaborations", value: settings.mergeCollaborations ? "Listed under first artist" : "Listed separately")
+                        LabeledContent("Favorite Artists", value: "\(settings.favoriteArtists.count)")
+                        LabeledContent("Play History", value: "\(library.playHistory.count.formatted()) plays")
+                    } header: {
+                        Text("From Your Mac")
+                    } footer: {
+                        Text("Your Mac decides these. Change them in Mesh Player on the Mac and sync.")
+                    }
                 }
 
                 Section("Storage") {
