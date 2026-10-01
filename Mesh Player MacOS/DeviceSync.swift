@@ -387,6 +387,16 @@ final class DeviceSyncController: ObservableObject {
         phase = .sending
         try await channel.send(.progress(SyncProgressInfo(filesDone: 0, filesTotal: filesTotal, bytesDone: 0, bytesTotal: bytesTotal)))
 
+        // Artwork first: it's small, and a sync that gets cut off still leaves every song with its cover.
+        currentItem = "Artwork"
+        for (key, track) in artworkTracks {
+            try Task.checkCancellation()
+            guard let data = await ArtworkStore.shared.jpegData(for: track, maxPixel: 800) else { filesDone += 1; continue }
+            try await channel.send(.fileBegin(SyncFileHeader(kind: .artwork, id: key, fileExtension: "jpg", size: Int64(data.count))))
+            try await channel.sendChunk(data)
+            try await channel.send(.fileEnd)
+            filesDone += 1
+        }
         for synced in audio {
             try Task.checkCancellation()
             guard let url = byId[synced.id]?.fileURL else { continue }
@@ -394,14 +404,6 @@ final class DeviceSyncController: ObservableObject {
             try await channel.sendFile(url, header: SyncFileHeader(kind: .audio, id: synced.id.uuidString, fileExtension: synced.fileExtension, size: synced.fileSize)) { bytes in
                 self.bytesDone += Int64(bytes)
             }
-            filesDone += 1
-        }
-        for (key, track) in artworkTracks {
-            try Task.checkCancellation()
-            guard let data = await ArtworkStore.shared.jpegData(for: track, maxPixel: 800) else { filesDone += 1; continue }
-            try await channel.send(.fileBegin(SyncFileHeader(kind: .artwork, id: key, fileExtension: "jpg", size: Int64(data.count))))
-            try await channel.sendChunk(data)
-            try await channel.send(.fileEnd)
             filesDone += 1
         }
 
