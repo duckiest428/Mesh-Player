@@ -294,7 +294,11 @@ final class DeviceSyncController: ObservableObject {
                     let parameters = NWParameters.tcp
                     parameters.includePeerToPeer = true
                     let nw = NWSyncTransport(connection: NWConnection(to: endpoint, using: parameters))
-                    try await nw.start()
+                    do {
+                        try await nw.start()
+                    } catch {
+                        throw Self.networkConnectError(error, deviceName: device.name)
+                    }
                     transport = nw
                 case .usb(let usb):
                     guard let fd = await Task.detached(operation: { UsbMux.connect(to: usb, port: MeshSync.port) }).value else {
@@ -313,6 +317,19 @@ final class DeviceSyncController: ObservableObject {
                 if case .failed = self.phase {} else { self.phase = .failed(error.localizedDescription) }
             }
             self.channel = nil
+        }
+    }
+
+    /// Turns a failed Wi-Fi connection into something the user can act on.
+    private static func networkConnectError(_ error: Error, deviceName: String) -> Error {
+        switch error as? NWError {
+        case .dns(let code) where code == -65570: // kDNSServiceErr_PolicyDenied
+            return SyncError.protocolError("Mesh Player isn't allowed on your local network. Turn it on in System Settings › Privacy & Security › Local Network, then try again.")
+        case .posix(.ECONNREFUSED):
+            return SyncError.protocolError("\(deviceName) isn't accepting connections. Open Mesh Player on the iPhone, keep it on screen, and try again.")
+        default:
+            // iOS silently drops connections to apps that aren't allowed Local Network access.
+            return SyncError.protocolError("Couldn't connect to \(deviceName). On the iPhone, turn on Local Network for Mesh Player (Settings › Apps › Mesh Player), keep the app open, and try again. A USB cable works too.")
         }
     }
 

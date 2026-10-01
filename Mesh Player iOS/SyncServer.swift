@@ -44,6 +44,7 @@ final class SyncServer: ObservableObject {
     var isSyncing: Bool { if case .syncing = status { return true }; return false }
 
     func start() {
+        startProbe()
         guard listener == nil else { return }
         do {
             let parameters = NWParameters.tcp
@@ -57,6 +58,8 @@ final class SyncServer: ObservableObject {
                     switch state {
                     case .ready:
                         if !self.isSyncing { self.status = .ready }
+                    case .waiting(let error):
+                        if !self.isSyncing { self.status = .unavailable(error.localizedDescription) }
                     case .failed(let error):
                         self.status = .unavailable(error.localizedDescription)
                         self.listener?.cancel()
@@ -81,7 +84,56 @@ final class SyncServer: ObservableObject {
         guard !isSyncing else { return }
         listener?.cancel()
         listener = nil
+        probe?.cancel()
+        probe = nil
         status = .stopped
+    }
+
+    /// Called when the app comes to the front. A listener that sat in a suspended app can be left
+    /// with a dead socket that still advertises, so start a fresh one.
+    func restart() {
+        guard !isSyncing, active == nil else { return }
+        listener?.cancel()
+        listener = nil
+        probe?.cancel()
+        probe = nil
+        start()
+    }
+
+    /// Listening for the Mac doesn't make iOS ask for Local Network access, and without it iOS
+    /// silently drops the Mac's connection. Browsing for our own service asks the first time and
+    /// reports PolicyDenied when access is off; seeing any result means access is on.
+    private func startProbe() {
+        guard probe == nil else { return }
+        let parameters = NWParameters()
+        parameters.includePeerToPeer = true
+        let browser = NWBrowser(for: .bonjour(type: MeshSync.serviceType, domain: nil), using: parameters)
+        browser.stateUpdateHandler = { [weak self] state in
+            let denied: Bool? = {
+                switch state {
+                case .waiting(let error), .failed(let error):
+                    if case .dns(let code) = error, code == Self.policyDenied { return true }
+                    return nil
+                default:
+                    return nil
+                }
+            }()
+            guard let denied else { return }
+            DispatchQueue.main.async { self?.localNetworkDenied = denied }
+        }
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            guard !results.isEmpty else { return }
+            DispatchQueue.main.async { self?.localNetworkDenied = false }
+        }
+        browser.start(queue: .main)
+        probe = browser
+    }
+
+    /// kDNSServiceErr_PolicyDenied
+    private static let policyDenied: DNSServiceErrorType = -65570
+
+    func openAppSettings() {
+        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
     }
 
     func respondToApproval(_ allow: Bool) {

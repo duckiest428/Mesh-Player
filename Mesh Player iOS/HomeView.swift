@@ -199,6 +199,7 @@ struct EmptyLibraryCard: View {
                 Circle().fill(statusColor).frame(width: 8, height: 8)
                 Text(statusText).font(.footnote).foregroundStyle(.secondary)
             }
+            LocalNetworkNotice()
             Divider()
             Button {
                 showImporter = true

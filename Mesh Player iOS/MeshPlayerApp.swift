@@ -25,11 +25,14 @@ struct MeshPlayerApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:
-                        sync.start()
+                        sync.restart()
                         library.importDocumentsFolder()
                     case .background:
                         library.saveNow()
-                        if !player.isPlaying { sync.stop() }
+                        // A suspended app's listener stops accepting connections but can keep
+                        // advertising, so the Mac would see a phone it can't reach. Stay
+                        // listening only while a sync is running (stop() checks that).
+                        sync.stop()
                     default:
                         break
                     }
@@ -49,6 +52,7 @@ struct RootView: View {
     @EnvironmentObject var sync: SyncServer
     @State private var tab: AppTab = .home
     @State private var showNowPlaying = false
+    @State private var dismissedNetworkAlert = false
 
     var body: some View {
         TabView(selection: $tab) {
@@ -81,12 +85,19 @@ struct RootView: View {
         .overlay(alignment: .top) {
             SyncBanner()
         }
+        .alert("Turn On Local Network", isPresented: Binding(get: { sync.localNetworkDenied && !dismissedNetworkAlert }, set: { if !$0 { dismissedNetworkAlert = true } })) {
+            Button("Open Settings") { sync.openAppSettings() }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text("Your Mac can't sync with Mesh Player until it's allowed on your local network. In Settings, turn on Local Network for Mesh Player.")
+        }
     }
 }
 
 /// Floating status pill while a sync runs or just finished.
 struct SyncBanner: View {
     @EnvironmentObject var sync: SyncServer
+    @ObservedObject private var progress = SyncProgress.shared
 
     var body: some View {
         Group {
@@ -119,5 +130,24 @@ struct SyncBanner: View {
         }
         .padding(.top, 4)
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: sync.status)
+    }
+}
+
+/// Shown where sync status appears when iOS is blocking the Mac's connections.
+struct LocalNetworkNotice: View {
+    @EnvironmentObject var sync: SyncServer
+
+    var body: some View {
+        if sync.localNetworkDenied {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Local Network is off", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Text("Your Mac can see this iPhone but can't connect to it. Turn on Local Network for Mesh Player in Settings.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button("Open Settings") { sync.openAppSettings() }
+                    .font(.footnote.weight(.semibold))
+            }
+        }
     }
 }

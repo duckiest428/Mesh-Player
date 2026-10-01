@@ -168,6 +168,7 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    if sync.localNetworkDenied { LocalNetworkNotice() }
                     if let last = library.lastSync {
                         LabeledContent("Last sync", value: "\(Format.relative(last))\(library.lastSyncSource.map { " from \($0)" } ?? "")")
                     }
@@ -229,6 +230,7 @@ struct SettingsView: View {
 
     private var statusTitle: String {
         switch sync.status {
+        case _ where sync.localNetworkDenied: return "Local Network is off"
         case .ready: return "Ready to sync"
         case .syncing: return "Syncing…"
         case .finished: return "Sync complete"
@@ -240,6 +242,7 @@ struct SettingsView: View {
 
     private var statusDetail: String {
         switch sync.status {
+        case _ where sync.localNetworkDenied: return "Macs can see this iPhone but can't connect."
         case .ready: return "Visible to Macs on this network and over USB as “\(UIDevice.current.name)”."
         case .syncing(let text): return text
         case .finished(let summary): return summary
