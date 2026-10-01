@@ -40,6 +40,7 @@ struct macOSMusicPlayerContentView: View {
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
+                    .contentZoom()
                     .background(theme.background)
                     .ignoresSafeArea(.container, edges: .top)
                 }
@@ -79,6 +80,7 @@ struct macOSMusicPlayerContentView: View {
 
             if state.showFullscreenPlayer {
                 FullLyricsView(state: state, engine: engine, timeTracker: engine.timeTracker, isPresented: $state.showFullscreenPlayer)
+                    .contentZoom()
                     .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
                                             removal: .move(edge: .bottom).combined(with: .opacity)))
                     .zIndex(10)
@@ -769,8 +771,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem?.menu = menu
 
-        // Space toggles playback unless a text field is being edited.
+        // Space toggles playback unless a text field is being edited; ⌘+ / ⌘- / ⌘0 zoom the page.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.modifierFlags.intersection([.command, .option, .control]) == .command,
+               let key = event.charactersIgnoringModifiers {
+                switch key {
+                case "=", "+": ContentZoom.zoomIn(); return nil
+                case "-", "_": ContentZoom.zoomOut(); return nil
+                case "0": ContentZoom.reset(); return nil
+                default: break
+                }
+            }
             guard event.keyCode == 49,
                   event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
             if let responder = event.window?.firstResponder, responder is NSText || responder is NSTextView { return event }
@@ -948,6 +959,14 @@ struct macOSMusicPlayerApp: App {
             }
 
             CommandGroup(replacing: .toolbar) {
+                // The key monitor in AppDelegate handles these shortcuts (so ⌘= works as ⌘+ too).
+                Button("Zoom In") { ContentZoom.zoomIn() }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("Zoom Out") { ContentZoom.zoomOut() }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Actual Size") { ContentZoom.reset() }
+                    .keyboardShortcut("0", modifiers: .command)
+                Divider()
                 Button("Show Lyrics") {
                     state.activeRightSidebar = state.activeRightSidebar == .lyrics ? .none : .lyrics
                 }
@@ -1787,4 +1806,42 @@ struct StatCardOS: View {
         .padding(12)
         .card(theme, radius: 14)
     }
+}
+
+// MARK: - Page zoom
+
+/// ⌘+ / ⌘- zoom for the page and the full screen player (the sidebar and player bar stay as they are).
+enum ContentZoom {
+    static let key = "contentZoom"
+    static let range: ClosedRange<Double> = 0.6...2.0
+    private static let steps: [Double] = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0]
+
+    static var current: Double { UserDefaults.standard.object(forKey: key) as? Double ?? 1 }
+
+    static func zoomIn() { set(steps.first { $0 > current + 0.001 } ?? range.upperBound) }
+    static func zoomOut() { set(steps.last { $0 < current - 0.001 } ?? range.lowerBound) }
+    static func reset() { set(1) }
+
+    private static func set(_ value: Double) {
+        UserDefaults.standard.set(min(max(value, range.lowerBound), range.upperBound), forKey: key)
+    }
+}
+
+private struct ContentZoomModifier: ViewModifier {
+    @AppStorage(ContentZoom.key) private var zoom = 1.0
+
+    func body(content: Content) -> some View {
+        // Lays the content out at size / zoom and scales it back up, so it reflows like a browser zoom.
+        GeometryReader { geo in
+            content
+                .frame(width: geo.size.width / zoom, height: geo.size.height / zoom)
+                .scaleEffect(zoom, anchor: .topLeading)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        }
+        .animation(.easeOut(duration: 0.18), value: zoom)
+    }
+}
+
+extension View {
+    func contentZoom() -> some View { modifier(ContentZoomModifier()) }
 }
