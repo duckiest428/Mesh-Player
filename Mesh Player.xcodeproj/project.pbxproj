@@ -306,6 +306,7 @@
 		000000000000000111000000 /* Debug configuration for PBXNativeTarget "Mesh Player" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = "Mesh Player.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -313,7 +314,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = HK8MSU972Q;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_FILE_ACCESS_MOVIES_FOLDER = readwrite;
@@ -372,6 +372,7 @@
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "Mesh Player" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = "Mesh Player.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -379,7 +380,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = HK8MSU972Q;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_FILE_ACCESS_MOVIES_FOLDER = readwrite;
