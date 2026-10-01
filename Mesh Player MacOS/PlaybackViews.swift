@@ -617,10 +617,11 @@ struct FullLyricsView: View {
             VStack(spacing: 0) {
                 topBar(effectiveRightPanel)
 
-                HStack(spacing: 64) {
+                GeometryReader { geo in
+                HStack(spacing: geo.size.width < 1000 ? 36 : 64) {
                     if effectiveRightPanel == .none { Spacer(minLength: 0) }
 
-                    playerColumn(theme)
+                    playerColumn(theme, art: Self.artworkSize(for: geo.size, hasPanel: effectiveRightPanel != .none))
 
                     if effectiveRightPanel == .none {
                         Spacer(minLength: 0)
@@ -645,7 +646,8 @@ struct FullLyricsView: View {
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                     }
                 }
-                .frame(maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
                 .padding(.horizontal, 56)
                 .padding(.bottom, 28)
                 .animation(.easeInOut(duration: 0.3), value: effectiveRightPanel)
@@ -721,9 +723,19 @@ struct FullLyricsView: View {
         .padding(.bottom, 8)
     }
 
-    private func playerColumn(_ theme: ThemeColor) -> some View {
+    /// Artwork size that fits the window: the controls below it need about 320 pt, and with a
+    /// side panel open the player gets roughly half the width.
+    static func artworkSize(for size: CGSize, hasPanel: Bool) -> CGFloat {
+        let columnWidth = hasPanel ? (size.width - 64) * 0.48 : size.width
+        return max(180, min(columnWidth, size.height - 320, 640))
+    }
+
+    private func playerColumn(_ theme: ThemeColor, art: CGFloat) -> some View {
         let glass = ThemeCatalog.theme(named: "True Black")
-        return VStack(spacing: 28) {
+        // Controls scale with the artwork, within limits that keep them legible and tappable.
+        let scale = min(max(art / 400, 0.8), 1.3)
+        let rowWidth = max(art, 300)
+        return VStack(spacing: 28 * min(scale, 1)) {
             Button {
                 if let track = engine.currentTrack {
                     state.showAlbum(track.album)
@@ -741,7 +753,7 @@ struct FullLyricsView: View {
                         RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.08))
                     }
                 }
-                .frame(width: 400, height: 400)
+                .frame(width: art, height: art)
             }
             .buttonStyle(.plain)
             .scaleEffect(engine.isPlaying ? (hoveringArt ? 1.015 : 1.0) : 0.88)
@@ -799,7 +811,7 @@ struct FullLyricsView: View {
                     .fixedSize()
                 }
             }
-            .frame(width: 420)
+            .frame(width: rowWidth + 20)
 
             VStack(spacing: 10) {
                 PlaybackScrubber(engine: engine, timeTracker: timeTracker, theme: theme, style: .fullscreen)
@@ -807,31 +819,31 @@ struct FullLyricsView: View {
                     AudioQualityTagsView(track: track, theme: glass)
                 }
             }
-            .frame(width: 460)
+            .frame(width: rowWidth + 60)
 
             HStack(spacing: 0) {
                 Button {
                     state.toggleShuffle(currentTrack: engine.currentTrack)
                 } label: {
-                    Image(systemName: "shuffle").font(.system(size: 16, weight: .semibold))
+                    Image(systemName: "shuffle").font(.system(size: 16 * scale, weight: .semibold))
                 }
-                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.isQueueShuffled, size: 40, activeColor: .white))
+                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.isQueueShuffled, size: 40 * scale, activeColor: .white))
                 Spacer()
                 Button {
                     state.playPrevious(engine: engine)
                 } label: {
-                    Image(systemName: "backward.fill").font(.system(size: 26))
+                    Image(systemName: "backward.fill").font(.system(size: 26 * scale))
                 }
-                .buttonStyle(IconButtonStyle(theme: glass, size: 52, activeColor: .white))
+                .buttonStyle(IconButtonStyle(theme: glass, size: 52 * scale, activeColor: .white))
                 Spacer()
                 Button {
                     engine.togglePlayPause()
                 } label: {
                     Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 26, weight: .bold))
+                        .font(.system(size: 26 * scale, weight: .bold))
                         .foregroundStyle(.black)
                         .offset(x: engine.isPlaying ? 0 : 2)
-                        .frame(width: 64, height: 64)
+                        .frame(width: 64 * scale, height: 64 * scale)
                         .background(.white, in: Circle())
                 }
                 .buttonStyle(PressableStyle())
@@ -839,23 +851,23 @@ struct FullLyricsView: View {
                 Button {
                     state.playNext(engine: engine)
                 } label: {
-                    Image(systemName: "forward.fill").font(.system(size: 26))
+                    Image(systemName: "forward.fill").font(.system(size: 26 * scale))
                 }
-                .buttonStyle(IconButtonStyle(theme: glass, size: 52, activeColor: .white))
+                .buttonStyle(IconButtonStyle(theme: glass, size: 52 * scale, activeColor: .white))
                 Spacer()
                 Button {
                     state.repeatMode = (state.repeatMode + 1) % 3
                 } label: {
-                    Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat").font(.system(size: 16, weight: .semibold))
+                    Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat").font(.system(size: 16 * scale, weight: .semibold))
                 }
-                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.repeatMode > 0, size: 40, activeColor: .white))
+                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.repeatMode > 0, size: 40 * scale, activeColor: .white))
             }
-            .frame(width: 400)
+            .frame(width: rowWidth)
 
             HStack(spacing: 8) {
                 Image(systemName: "speaker.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
                 ThinSlider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), theme: glass)
-                    .frame(width: 220, height: 16)
+                    .frame(width: max(160, rowWidth * 0.55), height: 16)
                 Image(systemName: "speaker.wave.3.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
             }
         }
