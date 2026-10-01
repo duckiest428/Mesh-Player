@@ -621,7 +621,13 @@ class AppStateManager: ObservableObject {
                 if let loaded {
                     self.isApplyingLoadedLibrary = true
                     self.tracks = loaded.tracks
-                    if !loaded.playlists.isEmpty { self.playlists = loaded.playlists }
+                    if !loaded.playlists.isEmpty {
+                        // Two playlists with one id make the sidebar open the wrong one; give repeats a new id.
+                        var seen = Set<UUID>()
+                        var lists = loaded.playlists
+                        for i in lists.indices where !seen.insert(lists[i].id).inserted { lists[i].id = UUID() }
+                        self.playlists = lists
+                    }
                     self.playHistoryLog = loaded.playHistoryLog ?? []
                     self.isApplyingLoadedLibrary = false
                 }
@@ -874,8 +880,17 @@ class AppStateManager: ObservableObject {
     func mergeImportedPlaylists(_ incoming: [Playlist]) {
         guard !incoming.isEmpty else { return }
         var updated = playlists
+        // Each existing playlist can be matched once. Match by Apple Music ID; fall back to the name
+        // only for playlists imported before IDs were stored, so two playlists that share a name
+        // (e.g. two called "Loose") never overwrite each other.
+        var claimed = Set<UUID>()
         for playlist in incoming {
-            if let idx = updated.firstIndex(where: { $0.isImported && ($0.name == playlist.name || ($0.appleMusicID != nil && $0.appleMusicID == playlist.appleMusicID)) }) {
+            let byID = playlist.appleMusicID.flatMap { id in
+                updated.firstIndex { $0.isImported && $0.appleMusicID == id && !claimed.contains($0.id) }
+            }
+            let byName = byID == nil ? updated.firstIndex { $0.isImported && $0.appleMusicID == nil && $0.name == playlist.name && !claimed.contains($0.id) } : nil
+            if let idx = byID ?? byName {
+                claimed.insert(updated[idx].id)
                 var replacement = playlist
                 let existing = updated[idx]
                 replacement.id = existing.id
@@ -885,8 +900,20 @@ class AppStateManager: ObservableObject {
                 updated[idx] = replacement
             } else {
                 updated.append(playlist)
+                claimed.insert(playlist.id)
             }
         }
+        // Earlier imports could leave two playlists with the same Apple Music ID or the same id;
+        // keep the one this import claimed.
+        var seenIDs = Set<UUID>()
+        var seenAppleIDs = Set<String>()
+        updated = updated.sorted { claimed.contains($0.id) && !claimed.contains($1.id) }.filter { p in
+            guard seenIDs.insert(p.id).inserted else { return false }
+            if p.isImported, let am = p.appleMusicID { return seenAppleIDs.insert(am).inserted }
+            return true
+        }
+        let order = Dictionary(playlists.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        updated.sort { (order[$0.id] ?? .max) < (order[$1.id] ?? .max) }
         playlists = updated
     }
 
