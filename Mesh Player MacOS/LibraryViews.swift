@@ -26,6 +26,9 @@ struct SongTableView: View {
     @State private var columnCustomization = TableColumnCustomization<LocalTrack>()
     @State private var editingPlaylist: Playlist?
     @State private var tableIdentity = TableIdentity()
+    /// ⌘+ / ⌘- zoom. The table itself is never scaled (AppKit tables re-measure their rows
+    /// endlessly when scaled); its text, icons and row height grow instead.
+    @AppStorage(ContentZoom.key) private var zoom = 1.0
 
     /// Tracks what the table last showed. NSTableView measures every *inserted* row, which made
     /// large diffs (leaving a playlist, clearing a search, importing) freeze the app for seconds.
@@ -64,9 +67,11 @@ struct SongTableView: View {
 
         VStack(spacing: 0) {
             header(theme: theme, tracks: tracks)
+                .contentZoom()
 
             if tracks.isEmpty {
                 emptyState(theme)
+                    .contentZoom()
             } else {
                 table(theme: theme, tracks: tracks)
                     .id(tableToken(for: tracks, context: context))
@@ -290,7 +295,7 @@ struct SongTableView: View {
         let playlistId = state.currentPlaylist?.id
         return Table(of: LocalTrack.self, selection: $state.selectedTrackIds, sortOrder: sortBinding, columnCustomization: $columnCustomization) {
             TableColumn("Title", value: \.title) { track in
-                TitleCell(track: track, engine: engine, theme: theme)
+                TitleCell(track: track, engine: engine, theme: theme, zoom: zoom)
             }
             .width(min: 160, ideal: 280)
             .customizationID("title")
@@ -333,13 +338,13 @@ struct SongTableView: View {
             .customizationID("dateAdded")
 
             TableColumn("Quality", value: \.format) { track in
-                FormatBadge(track: track, theme: theme)
+                FormatBadge(track: track, theme: theme, zoom: zoom)
             }
             .width(min: 60, ideal: 110, max: 150)
             .customizationID("format")
 
             TableColumn("♥", value: \.favoriteRank) { track in
-                FavoriteCell(track: track, theme: theme) { state.toggleFavorite(track: track) }
+                FavoriteCell(track: track, theme: theme, zoom: zoom) { state.toggleFavorite(track: track) }
             }
             .width(28)
             .alignment(.center)
@@ -366,8 +371,8 @@ struct SongTableView: View {
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
         .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 30)
-        .font(.system(size: 12.5))
+        .environment(\.defaultMinListRowHeight, (30 * zoom).rounded())
+        .font(.system(size: 12.5 * zoom))
         .contextMenu(forSelectionType: LocalTrack.ID.self) { ids in
             contextMenu(for: ids, in: tracks)
         } primaryAction: { ids in
@@ -505,6 +510,7 @@ private struct TitleCell: View {
     let track: LocalTrack
     @ObservedObject var engine: AudioEngineManager
     let theme: ThemeColor
+    var zoom: Double = 1
 
     var body: some View {
         let isCurrent = engine.currentTrack?.id == track.id
@@ -514,13 +520,13 @@ private struct TitleCell: View {
                     AnimatedEQView(color: theme.accent, isPlaying: engine.isPlaying)
                 }
             }
-            .frame(width: 14)
+            .frame(width: 14 * zoom)
             Text(track.title)
                 .fontWeight(isCurrent ? .semibold : .regular)
                 .foregroundStyle(isCurrent ? theme.accent : theme.textPrimary)
                 .lineLimit(1)
             if track.isAtmos {
-                DolbyAtmosBadge(color: theme.textSecondary, scale: 0.55, showText: false)
+                DolbyAtmosBadge(color: theme.textSecondary, scale: 0.55 * zoom, showText: false)
             }
         }
     }
@@ -529,13 +535,14 @@ private struct TitleCell: View {
 private struct FavoriteCell: View {
     let track: LocalTrack
     let theme: ThemeColor
+    var zoom: Double = 1
     let toggle: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: toggle) {
             Image(systemName: track.isFavorite ? "heart.fill" : "heart")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11 * zoom, weight: .semibold))
                 .foregroundStyle(track.isFavorite ? theme.accent : theme.textTertiary)
                 .opacity(track.isFavorite || hovering ? 1 : 0.55)
         }
@@ -548,20 +555,21 @@ private struct FavoriteCell: View {
 struct FormatBadge: View {
     let track: LocalTrack
     let theme: ThemeColor
+    var zoom: Double = 1
 
     var body: some View {
         if track.isAtmos {
-            DolbyAtmosBadge(color: theme.textSecondary, scale: 0.62, showText: true)
+            DolbyAtmosBadge(color: theme.textSecondary, scale: 0.62 * zoom, showText: true)
         } else if track.format.localizedCaseInsensitiveContains("lossless") {
             HStack(spacing: 3) {
-                Image(systemName: "waveform").font(.system(size: 9, weight: .bold))
+                Image(systemName: "waveform").font(.system(size: 9 * zoom, weight: .bold))
                 Text(track.format.localizedCaseInsensitiveContains("hi-res") ? "Hi-Res" : "Lossless")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: 10.5 * zoom, weight: .semibold))
             }
             .foregroundStyle(theme.textSecondary)
         } else {
             Text(track.format)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10.5 * zoom, weight: .medium))
                 .foregroundStyle(theme.textTertiary)
                 .lineLimit(1)
         }

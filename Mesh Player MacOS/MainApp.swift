@@ -221,8 +221,8 @@ struct DetailRouter: View {
             .background(theme.background)
     }
 
-    /// Song tables (Songs, playlists) are AppKit tables underneath and are never zoomed: scaling
-    /// one made its rows re-measure endlessly and crashed the app. Every other page is zoomed.
+    /// Song tables (Songs, playlists) are AppKit tables underneath and must not be scaled: that
+    /// made their rows re-measure endlessly and crashed the app. They zoom their text instead.
     @ViewBuilder
     private func content(tab: String) -> some View {
         if tab == "songs" || tab.hasPrefix("playlist-") || isTableFilter {
@@ -1879,12 +1879,10 @@ private struct ContentZoomModifier: ViewModifier {
     }
 
     private func zoomed(_ content: Content) -> some View {
-        // Lays the content out at size / zoom and scales it back up, so it reflows like a browser zoom.
-        GeometryReader { geo in
-            content
-                .frame(width: geo.size.width / zoom, height: geo.size.height / zoom)
-                .scaleEffect(zoom, anchor: .topLeading)
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        // Lays the content out at size / zoom and draws it scaled back up, so it reflows like a
+        // browser zoom. Works for views that fill the page and for ones that size themselves.
+        ZoomLayout(zoom: zoom) {
+            content.scaleEffect(zoom, anchor: .topLeading)
         }
         .animation(.easeOut(duration: 0.18), value: zoom)
     }
@@ -1892,4 +1890,24 @@ private struct ContentZoomModifier: ViewModifier {
 
 extension View {
     func contentZoom() -> some View { modifier(ContentZoomModifier()) }
+}
+
+/// Gives its single child size / zoom and reports the child's size × zoom.
+private struct ZoomLayout: Layout {
+    let zoom: Double
+
+    private func inner(_ proposal: ProposedViewSize) -> ProposedViewSize {
+        ProposedViewSize(width: proposal.width.map { $0 / zoom }, height: proposal.height.map { $0 / zoom })
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let size = child.sizeThatFits(inner(proposal))
+        return CGSize(width: size.width * zoom, height: size.height * zoom)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading,
+                              proposal: ProposedViewSize(width: bounds.width / zoom, height: bounds.height / zoom))
+    }
 }
