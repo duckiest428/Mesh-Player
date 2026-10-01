@@ -28,6 +28,16 @@ final class MobilePlayer: ObservableObject {
     @Published private(set) var index = 0
     @Published private(set) var isShuffled = false
     @Published var repeatMode: RepeatMode = .off
+    /// When the queue runs out, keep going with similar songs from the library (∞ in the queue).
+    @Published var autoplay: Bool = UserDefaults.standard.object(forKey: "autoplay") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoplay, forKey: "autoplay") }
+    }
+    /// Fade songs out and in at the change.
+    @Published var crossfade: Bool = UserDefaults.standard.bool(forKey: "crossfade") {
+        didSet { UserDefaults.standard.set(crossfade, forKey: "crossfade"); if !crossfade { player.volume = 1 } }
+    }
+    /// Songs Autoplay added (shown under "Autoplay" in the queue).
+    @Published private(set) var autoplayStart: Int?
     @Published private(set) var lyrics: [SyncedLyricLine] = []
     let clock = PlaybackClock()
 
@@ -87,6 +97,7 @@ final class MobilePlayer: ObservableObject {
     func play(_ songs: [Song], startAt song: Song? = nil, shuffled: Bool = false) {
         let playable = songs.filter(\.isAvailable)
         guard !playable.isEmpty else { return }
+        autoplayStart = nil
         originalQueue = playable.map(\.id)
         isShuffled = shuffled
         if shuffled {
@@ -180,12 +191,32 @@ final class MobilePlayer: ObservableObject {
             index += 1
         } else if repeatMode == .all {
             index = 0
+        } else if autoplay, let more = autoplaySongs(), !more.isEmpty {
+            autoplayStart = autoplayStart ?? queue.count
+            queue.append(contentsOf: more)
+            originalQueue.append(contentsOf: more)
+            index += 1
         } else {
             pause()
             seek(to: 0)
             return
         }
         load(queue[index], autoplay: true)
+    }
+
+    /// Songs to continue with: more by the artists just played, then the same genres, favorites
+    /// and most played first — never ones already in the queue.
+    private func autoplaySongs() -> [UUID]? {
+        let inQueue = Set(queue)
+        let recent = queue.suffix(10).compactMap(library.song)
+        let artists = Set(recent.map(\.artist)), genres = Set(recent.map(\.genre))
+        let pool = library.availableSongs.filter { !inQueue.contains($0.id) }
+        let sameArtist = pool.filter { artists.contains($0.artist) }.shuffled()
+        let sameGenre = pool.filter { genres.contains($0.genre) && !artists.contains($0.artist) }
+            .sorted { ($0.isFavorite ? 1 : 0, $0.playCount) > ($1.isFavorite ? 1 : 0, $1.playCount) }.prefix(40).shuffled()
+        var picks = Array(sameArtist.prefix(8)) + Array(sameGenre.prefix(12))
+        if picks.isEmpty { picks = Array(pool.shuffled().prefix(20)) }
+        return picks.map(\.id)
     }
 
     func previous() {
