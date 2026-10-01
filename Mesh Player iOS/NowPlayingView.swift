@@ -16,7 +16,7 @@ struct NowPlayingView: View {
     @EnvironmentObject var library: MobileLibrary
     @Environment(\.dismiss) private var dismiss
     @State private var panel: Panel = .artwork
-    @State private var colors: [Color] = [Color(white: 0.2), Color(white: 0.08)]
+    @State private var colors: [Color] = [Color(white: 0.22), Color(white: 0.1)]
     @State private var dragOffset: CGFloat = 0
     /// Full-screen (tall) motion artwork for the current album, when Apple Music has one.
     @State private var tallVideo: URL?
@@ -29,30 +29,8 @@ struct NowPlayingView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
-                    .ignoresSafeArea()
-                    .animation(.easeInOut(duration: 0.8), value: colors)
-
-                if animatedArtwork, let tallVideo {
-                    // Like Apple Music: the tall video fills the screen behind the controls.
-                    MotionArtworkView(url: tallVideo)
-                        .ignoresSafeArea()
-                        .overlay {
-                            LinearGradient(stops: [
-                                .init(color: .black.opacity(0.35), location: 0),
-                                .init(color: .clear, location: 0.18),
-                                .init(color: .clear, location: 0.5),
-                                .init(color: .black.opacity(0.8), location: 1)
-                            ], startPoint: .top, endPoint: .bottom)
-                            .ignoresSafeArea()
-                        }
-                        .opacity(panel == .artwork ? 1 : 0.35)
-                        .animation(.easeInOut(duration: 0.4), value: panel)
-                        .transition(.opacity)
-                }
-
                 VStack(spacing: 0) {
-                    Capsule().fill(.white.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
+                    Capsule().fill(.white.opacity(0.45)).frame(width: 38, height: 5).padding(.top, 8)
 
                     Group {
                         switch panel {
@@ -60,14 +38,14 @@ struct NowPlayingView: View {
                             if showsTallArtwork {
                                 Spacer(minLength: 0)
                             } else {
-                                artwork(width: min(geo.size.width - 48, 380))
+                                artwork(width: geo.size.width - 56)
                                     .frame(maxHeight: .infinity)
                             }
                         case .lyrics:
-                            compactHeader.padding(.top, 20)
+                            compactHeader.padding(.top, 22)
                             LyricsPanel()
                         case .queue:
-                            compactHeader.padding(.top, 20)
+                            compactHeader.padding(.top, 22)
                             QueuePanel()
                         }
                     }
@@ -75,9 +53,11 @@ struct NowPlayingView: View {
 
                     controls
                         .padding(.horizontal, 28)
-                        .padding(.bottom, 12)
+                        .padding(.bottom, 10)
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
+            .frame(width: geo.size.width, height: geo.size.height)
             .offset(y: dragOffset)
             .gesture(
                 DragGesture()
@@ -89,7 +69,13 @@ struct NowPlayingView: View {
             )
         }
         .environment(\.colorScheme, .dark)
-        .task(id: player.current?.artworkKey) { await updateColors() }
+        // The cover's own background, so it reaches behind the status bar and home indicator.
+        .presentationBackground { background.offset(y: dragOffset) }
+        .task(id: player.current?.artworkKey) {
+            if let found = await ArtworkPalette.colors(for: player.current?.artworkKey, darken: 0.62) {
+                withAnimation(.easeInOut(duration: 0.8)) { colors = found }
+            }
+        }
         .task(id: player.current?.artworkKey) {
             guard animatedArtwork, let song = player.current else { tallVideo = nil; return }
             let videos = await AnimatedArtworkService.shared.videos(key: song.artworkKey, album: song.album, artist: song.albumArtist, localFolder: nil)
@@ -97,142 +83,173 @@ struct NowPlayingView: View {
         }
     }
 
+    // MARK: Background
+
+    /// The cover's colors, with a heavily blurred copy of the cover on top so the background
+    /// carries its texture the way Apple Music's does.
+    private var background: some View {
+        // Every layer is sized by the screen (Color.clear), never by its own content: an image
+        // set to fill would otherwise make the whole player wider than the display.
+        ZStack {
+            LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
+            Color.clear
+                .overlay {
+                    ArtworkImage(key: player.current?.artworkKey, size: 120, cornerRadius: 0, seed: player.current?.album ?? "")
+                        .aspectRatio(1, contentMode: .fill)
+                        .scaleEffect(1.6)
+                        .blur(radius: 70)
+                        .opacity(0.55)
+                }
+                .clipped()
+            LinearGradient(colors: [.clear, colors.last ?? .black], startPoint: .center, endPoint: .bottom).opacity(0.85)
+            if animatedArtwork, let tallVideo {
+                // Like Apple Music: the tall video fills the screen behind the controls; it
+                // folds away for lyrics and the queue.
+                Color.clear.overlay { MotionArtworkView(url: tallVideo) }.clipped()
+                    .overlay {
+                        LinearGradient(stops: [
+                            .init(color: .black.opacity(0.3), location: 0),
+                            .init(color: .clear, location: 0.18),
+                            .init(color: .clear, location: 0.45),
+                            .init(color: .black.opacity(0.85), location: 1)
+                        ], startPoint: .top, endPoint: .bottom)
+                    }
+                    .opacity(panel == .artwork ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.4), value: panel)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.8), value: colors)
+        .ignoresSafeArea()
+        .clipped()
+    }
+
     // MARK: Artwork
 
     private func artwork(width: CGFloat) -> some View {
         let song = player.current
         return ZStack {
-            ArtworkImage(key: song?.artworkKey, size: width, cornerRadius: 14, seed: song?.album ?? "")
+            ArtworkImage(key: song?.artworkKey, size: width, cornerRadius: 12, seed: song?.album ?? "")
             MotionArtwork(song: song)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .frame(width: width, height: width)
-        .scaleEffect(player.isPlaying ? 1 : 0.82)
+        .scaleEffect(player.isPlaying ? 1 : 0.8)
         .shadow(color: .black.opacity(player.isPlaying ? 0.45 : 0.25), radius: player.isPlaying ? 30 : 12, y: player.isPlaying ? 16 : 6)
         .animation(.spring(response: 0.5, dampingFraction: 0.72), value: player.isPlaying)
     }
 
     private var compactHeader: some View {
-        HStack(spacing: 12) {
-            ArtworkImage(key: player.current?.artworkKey, size: 64, cornerRadius: 8, seed: player.current?.album ?? "")
-                .frame(width: 64, height: 64)
+        HStack(spacing: 14) {
+            ArtworkImage(key: player.current?.artworkKey, size: 82, cornerRadius: 8, seed: player.current?.album ?? "")
+                .frame(width: 82, height: 82)
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
             VStack(alignment: .leading, spacing: 2) {
-                Text(player.current?.title ?? "").font(.headline).lineLimit(1)
-                Text(player.current?.artist ?? "").font(.subheadline).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                Text(player.current?.title ?? "").font(.title3.bold()).lineLimit(1)
+                Text(player.current?.artist ?? "").font(.title3).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: 4)
+            favoriteAndMenu
         }
         .padding(.horizontal, 28)
+    }
+
+    @ViewBuilder
+    private var favoriteAndMenu: some View {
+        if let song = player.current {
+            let isFavorite = library.song(song.id)?.isFavorite ?? false
+            Button { library.toggleFavorite(song.id) } label: {
+                Image(systemName: isFavorite ? "star.fill" : "star")
+                    .font(.title2)
+                    .frame(width: 40, height: 40)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.plain)
+            Menu {
+                SongMenu(songs: [song])
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.title2.weight(.semibold))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // MARK: Controls
 
     private var controls: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 0) {
             if panel == .artwork {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .center, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(player.current?.title ?? "Not Playing")
-                            .font(.title3.bold())
+                            .font(.title2.bold())
                             .lineLimit(1)
                         Text(player.current?.artist ?? "")
-                            .font(.title3)
-                            .foregroundStyle(.white.opacity(0.65))
+                            .font(.title2)
+                            .foregroundStyle(.white.opacity(0.7))
                             .lineLimit(1)
                     }
-                    Spacer()
-                    if let song = player.current {
-                        let isFavorite = library.song(song.id)?.isFavorite ?? false
-                        Button { library.toggleFavorite(song.id) } label: {
-                            Image(systemName: isFavorite ? "star.fill" : "star")
-                                .font(.title3)
-                                .frame(width: 36, height: 36)
-                                .background(.white.opacity(0.14), in: Circle())
-                                .contentTransition(.symbolEffect(.replace))
-                        }
-                        Menu {
-                            SongMenu(songs: [song])
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.title3)
-                                .frame(width: 36, height: 36)
-                                .background(.white.opacity(0.14), in: Circle())
-                        }
-                    }
+                    Spacer(minLength: 4)
+                    favoriteAndMenu
                 }
+                .padding(.bottom, 26)
             }
 
             Scrubber()
+                .padding(.bottom, 34)
 
             HStack {
                 Spacer()
-                Button { player.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 32)) }
+                Button { player.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 36)) }
                 Spacer()
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 46))
+                        .font(.system(size: 52))
                         .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 70, height: 70)
+                        .frame(width: 80, height: 80)
                 }
                 Spacer()
-                Button { player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 32)) }
+                Button { player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 36)) }
                 Spacer()
             }
+            .padding(.bottom, 30)
 
-            HStack(spacing: 10) {
-                Image(systemName: "speaker.fill").font(.caption)
+            HStack(spacing: 12) {
+                Image(systemName: "speaker.fill").font(.subheadline)
                 SystemVolumeSlider().frame(height: 30)
-                Image(systemName: "speaker.wave.3.fill").font(.caption)
+                Image(systemName: "speaker.wave.3.fill").font(.subheadline)
             }
-            .foregroundStyle(.white.opacity(0.6))
+            .foregroundStyle(.white.opacity(0.7))
+            .padding(.bottom, 20)
 
             HStack {
                 panelButton(.lyrics, icon: "quote.bubble")
                     .disabled(player.lyrics.isEmpty)
+                    .opacity(player.lyrics.isEmpty ? 0.4 : 1)
                 Spacer()
-                RoutePicker().frame(width: 44, height: 44)
+                RoutePicker().frame(width: 52, height: 52)
                 Spacer()
                 panelButton(.queue, icon: "list.bullet")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 36)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
     }
 
     private func panelButton(_ target: Panel, icon: String) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { panel = panel == target ? .artwork : target }
+        let active = panel == target
+        return Button {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { panel = active ? .artwork : target }
         } label: {
             Image(systemName: icon)
-                .font(.title3)
-                .frame(width: 44, height: 44)
-                .background(panel == target ? .white.opacity(0.22) : .clear, in: Circle())
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(active ? colors.first ?? .black : .white)
+                .frame(width: 52, height: 52)
+                .background(active ? .white.opacity(0.85) : .clear, in: Circle())
         }
-    }
-
-    // MARK: Background colors
-
-    private func updateColors() async {
-        guard let key = player.current?.artworkKey, let image = await ArtworkCache.shared.image(key, size: 60) else { return }
-        let extracted = await Task.detached(priority: .utility) { Self.dominantColors(image) }.value
-        if let extracted { colors = extracted }
-    }
-
-    nonisolated private static func dominantColors(_ image: UIImage) -> [Color]? {
-        guard let cg = image.cgImage else { return nil }
-        let width = 8, height = 8
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
-        func average(rows: Range<Int>) -> Color {
-            var r = 0, g = 0, b = 0, n = 0
-            for y in rows { for x in 0..<width { let i = (y * width + x) * 4; r += Int(pixels[i]); g += Int(pixels[i + 1]); b += Int(pixels[i + 2]); n += 1 } }
-            // Darken a little so white text always reads.
-            return Color(red: Double(r) / Double(n) / 255 * 0.75, green: Double(g) / Double(n) / 255 * 0.75, blue: Double(b) / Double(n) / 255 * 0.75)
-        }
-        return [average(rows: 0..<4), average(rows: 4..<8)]
     }
 }
 
@@ -256,9 +273,9 @@ private struct ScrubberBody: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.25))
-                    Capsule().fill(.white).frame(width: geo.size.width * fraction)
+                    Capsule().fill(.white.opacity(dragFraction == nil ? 0.75 : 1)).frame(width: geo.size.width * fraction)
                 }
-                .frame(height: dragFraction == nil ? 6 : 10)
+                .frame(height: dragFraction == nil ? 8 : 13)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0)
@@ -340,41 +357,92 @@ private struct QueuePanel: View {
     @EnvironmentObject var player: MobilePlayer
 
     var body: some View {
+        let upNext = player.upNext
+        let autoplayOffset = player.autoplayStart.map { max(0, $0 - player.index - 1) }
         VStack(spacing: 0) {
-            HStack {
-                Text("Up Next").font(.headline)
-                Spacer()
-                Button { player.toggleShuffle() } label: {
-                    Image(systemName: "shuffle")
-                        .frame(width: 40, height: 32)
-                        .background(player.isShuffled ? .white.opacity(0.25) : .white.opacity(0.08), in: Capsule())
-                }
-                Button { player.cycleRepeat() } label: {
-                    Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat")
-                        .frame(width: 40, height: 32)
-                        .background(player.repeatMode != .off ? .white.opacity(0.25) : .white.opacity(0.08), in: Capsule())
-                }
+            HStack(spacing: 10) {
+                toggle("shuffle", isOn: player.isShuffled) { player.toggleShuffle() }
+                toggle(player.repeatMode == .one ? "repeat.1" : "repeat", isOn: player.repeatMode != .off) { player.cycleRepeat() }
+                toggle("infinity", isOn: player.autoplay) { player.autoplay.toggle() }
+                toggle("arrow.triangle.merge", isOn: player.crossfade) { player.crossfade.toggle() }
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 28)
-            .padding(.vertical, 12)
+            .padding(.top, 20)
 
             List {
-                ForEach(Array(player.upNext.enumerated()), id: \.offset) { offset, song in
-                    Button { player.jump(to: player.index + 1 + offset) } label: { SongRow(song: song) }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Color.clear)
+                Section {
+                    ForEach(Array(upNext.enumerated()), id: \.offset) { offset, song in
+                        if autoplayOffset == nil || offset < autoplayOffset! {
+                            row(song, offset: offset)
+                        }
+                    }
+                    .onMove { player.moveInQueue(from: $0, to: $1) }
+                    .deleteDisabled(true)
+                } header: {
+                    header(player.isShuffled ? "Continue Playing (Shuffled)" : "Continue Playing")
                 }
-                .onDelete { player.removeFromQueue(at: $0) }
-                .onMove { player.moveInQueue(from: $0, to: $1) }
+                if let autoplayOffset, autoplayOffset < upNext.count {
+                    Section {
+                        ForEach(Array(upNext.enumerated()).filter { $0.offset >= autoplayOffset }, id: \.offset) { offset, song in
+                            row(song, offset: offset)
+                        }
+                    } header: {
+                        header("Autoplay")
+                    }
+                }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .environment(\.editMode, .constant(.active))
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.9), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .overlay {
-                if player.upNext.isEmpty { Text("Nothing up next").foregroundStyle(.white.opacity(0.5)) }
+                if upNext.isEmpty {
+                    Text(player.autoplay ? "Autoplay continues with similar songs" : "Nothing up next")
+                        .foregroundStyle(.white.opacity(0.55))
+                }
             }
         }
+    }
+
+    private func header(_ title: String) -> some View {
+        Text(title)
+            .font(.title3.bold())
+            .foregroundStyle(.white)
+            .textCase(nil)
+            .padding(.top, 6)
+    }
+
+    private func row(_ song: Song, offset: Int) -> some View {
+        Button { player.jump(to: player.index + 1 + offset) } label: {
+            HStack(spacing: 14) {
+                ArtworkImage(key: song.artworkKey, size: 54, cornerRadius: 6, seed: song.album)
+                    .frame(width: 54, height: 54)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(song.title).font(.title3).lineLimit(1)
+                    Text(song.artist).font(.body).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .contextMenu {
+            Button(role: .destructive) { player.removeFromQueue(at: IndexSet(integer: offset)) } label: { Label("Remove from Queue", systemImage: "minus.circle") }
+        }
+    }
+
+    private func toggle(_ symbol: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(isOn ? Color.black.opacity(0.75) : .white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .background(isOn ? .white.opacity(0.75) : .white.opacity(0.14), in: Capsule())
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.plain)
     }
 }
 
