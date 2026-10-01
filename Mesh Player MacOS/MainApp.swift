@@ -196,8 +196,20 @@ struct DetailRouter: View {
             case "artist" where tab == "albums":
                 AlbumGridView(state: state, engine: engine)
             case "artist":
-                ArtistDetailView(state: state, engine: engine)
+                ArtistPageView(state: state, engine: engine, name: value)
                     .id(value)
+            case "artistSection":
+                let parts = value.components(separatedBy: "\u{1}")
+                if parts.count == 2, let section = ArtistSection(rawValue: parts[0]) {
+                    ArtistSectionView(state: state, engine: engine, section: section, name: parts[1])
+                        .id(value)
+                }
+            case "searchSection":
+                let parts = value.components(separatedBy: "\u{1}")
+                if parts.count == 2, let section = SearchSection(rawValue: parts[0]) {
+                    SearchSectionView(state: state, engine: engine, section: section, query: parts[1])
+                        .id(value)
+                }
             default:
                 SongTableView(state: state, engine: engine)
             }
@@ -1350,215 +1362,6 @@ struct CachedArtistProfileView: View {
         } catch {
             print("Failed to fetch artist profile picture: \(error)")
         }
-    }
-}
-
-// MARK: - Artist page
-
-struct ArtistDetailView: View {
-    @ObservedObject var state: AppStateManager
-    let engine: AudioEngineManager
-
-    @State private var bannerImage: NSImage?
-
-    private var artistName: String { state.activeFilterValue ?? "Unknown Artist" }
-
-    var body: some View {
-        let theme = state.theme
-        let name = artistName
-        let songs = state.libraryTracks.filter { $0.artist == name }
-        let albums = state.albumsList.filter { $0.artist == name || $0.trackRepresentative.artist == name }.sorted {
-            ($0.yearRecorded ?? 0, $0.name) > ($1.yearRecorded ?? 0, $1.name)
-        }
-        let topSongs = Array(songs.sorted { $0.playCount > $1.playCount }.prefix(10))
-        let playlists = state.playlists.filter { playlist in playlist.playlistTracks.contains { $0.track.artist == name } }
-        let totalPlays = songs.reduce(0) { $0 + $1.playCount }
-
-        ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                // Hero
-                ZStack(alignment: .bottomLeading) {
-                    Group {
-                        if let bannerImage {
-                            Image(nsImage: bannerImage).resizable().scaledToFill()
-                        } else if let first = songs.first {
-                            ArtworkView(track: first, pixelSize: 96, cornerRadius: 0, placeholderSymbol: nil)
-                                .blur(radius: 40, opaque: true)
-                                .scaleEffect(1.2)
-                        } else {
-                            theme.cardBackground
-                        }
-                    }
-                    .frame(height: 320)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-
-                    LinearGradient(colors: [.clear, .black.opacity(0.25), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Eyebrow(text: "Artist", color: .white.opacity(0.75))
-                        Text(name)
-                            .font(.system(size: 52, weight: .heavy))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.5)
-                            .shadow(color: .black.opacity(0.3), radius: 10, y: 3)
-                        Text("\(Fmt.songs(songs.count)) · \(Fmt.count(albums.count)) album\(albums.count == 1 ? "" : "s")\(totalPlays > 0 ? " · \(Fmt.count(totalPlays)) plays" : "")")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.8))
-                        HStack(spacing: 8) {
-                            Button {
-                                state.play(songs, shuffled: false, engine: engine)
-                            } label: {
-                                Label("Play", systemImage: "play.fill")
-                            }
-                            .buttonStyle(PillButtonStyle(kind: .primary, theme: theme))
-                            Button {
-                                state.play(songs, shuffled: true, engine: engine)
-                            } label: {
-                                Label("Shuffle", systemImage: "shuffle")
-                            }
-                            .buttonStyle(PillButtonStyle(kind: .ghost, theme: ThemeCatalog.theme(named: "True Black")))
-                        }
-                        .padding(.top, 4)
-                    }
-                    .padding(28)
-                }
-                .frame(height: 320)
-                .environment(\.colorScheme, .dark)
-
-                if !topSongs.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Top Songs", theme: theme) {
-                            state.navigate(to: "songs", keepingSearch: false)
-                            state.activeFilterType = "artist"
-                            state.activeFilterValue = name
-                            state.sortCriteria = "playCount"
-                            state.sortAscending = false
-                        }
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 4) {
-                            ForEach(Array(topSongs.enumerated()), id: \.element.id) { index, track in
-                                TopSongRow(index: index + 1, track: track, theme: theme) {
-                                    state.play(topSongs, startingAt: track, engine: engine)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 28)
-                    }
-                }
-
-                if !albums.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Albums", theme: theme) {
-                            state.selectedTab = "albums"
-                            state.activeFilterType = "artist"
-                            state.activeFilterValue = name
-                        }
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 20) {
-                                ForEach(albums) { album in
-                                    AlbumCell(album: album, theme: theme, subtitle: album.yearRecorded.map(String.init) ?? "Album") {
-                                        state.showAlbum(album.name)
-                                    } onPlay: {
-                                        state.play(state.albumTracks(named: album.name), engine: engine)
-                                    }
-                                    .frame(width: 170)
-                                }
-                            }
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 8)
-                        }
-                    }
-                }
-
-                if !playlists.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Featured in Your Playlists", theme: theme)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 20) {
-                                ForEach(playlists) { playlist in
-                                    Button {
-                                        state.selectedTab = "playlist-\(playlist.id.uuidString)"
-                                    } label: {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            PlaylistMosaic(tracks: state.resolvedTracks(of: playlist), theme: theme)
-                                                .frame(width: 160, height: 160)
-                                                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
-                                            Text(playlist.name)
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .foregroundStyle(theme.textPrimary)
-                                                .lineLimit(1)
-                                        }
-                                        .frame(width: 160)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .hoverLift()
-                                }
-                            }
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 8)
-                        }
-                    }
-                }
-
-                ArtistBioView(artistName: name, themeAccent: theme.accent, textColor: theme.textPrimary)
-                    .padding(.horizontal, 28)
-            }
-            .padding(.bottom, 48)
-        }
-        .background(theme.background)
-        .task(id: name) {
-            bannerImage = nil
-            guard let url = try? await CachedArtistBannerService.shared.fetchAndCacheArtistBanner(for: name) else { return }
-            let image = await Task.detached(priority: .utility) { ArtworkStore.downsample(url: url, maxPixel: 1800) }.value
-            withAnimation(.easeOut(duration: 0.3)) { bannerImage = image }
-        }
-    }
-}
-
-private struct TopSongRow: View {
-    let index: Int
-    let track: LocalTrack
-    let theme: ThemeColor
-    let onPlay: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ArtworkView(track: track, pixelSize: 96, cornerRadius: 5)
-                .frame(width: 42, height: 42)
-                .overlay {
-                    if hovering {
-                        RoundedRectangle(cornerRadius: 5).fill(.black.opacity(0.45))
-                        Image(systemName: "play.fill").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                    }
-                }
-            Text("\(index)")
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                .foregroundStyle(theme.textTertiary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Text(track.album)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            if track.playCount > 0 {
-                Text("\(Fmt.count(track.playCount)) play\(track.playCount == 1 ? "" : "s")")
-                    .font(.system(size: 11.5).monospacedDigit())
-                    .foregroundStyle(theme.textTertiary)
-            }
-        }
-        .padding(8)
-        .background(hovering ? theme.hover : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onPlay)
-        .onHover { hovering = $0 }
     }
 }
 

@@ -526,7 +526,11 @@ struct GetMusicView: View {
             }
         }
         .background(theme.background)
-        .onAppear { downloader.prepare() }
+        .onAppear {
+            downloader.prepare()
+            takePresetQuery()
+        }
+        .onChange(of: state.getMusicQuery) { _, _ in takePresetQuery() }
     }
 
     private func searchField(_ theme: ThemeColor) -> some View {
@@ -560,6 +564,13 @@ struct GetMusicView: View {
         let kind: CatalogItem.Kind = trimmed.contains("/music-video/") ? .musicVideo : (trimmed.contains("?i=") || trimmed.contains("/song/") ? .song : .album)
         return CatalogItem(id: "link-\(trimmed)", kind: kind, title: url.pathComponents.dropLast().last?.replacingOccurrences(of: "-", with: " ").capitalized ?? "Apple Music link",
                            artist: "Apple Music link", album: nil, artworkURL: nil, appleMusicURL: url, year: nil, trackCount: nil, isExplicit: false)
+    }
+
+    /// Other pages (e.g. Essential Albums on an artist page) open Get Music with a search ready.
+    private func takePresetQuery() {
+        guard let preset = state.getMusicQuery else { return }
+        state.getMusicQuery = nil
+        query = preset
     }
 
     private func scheduleSearch() {
