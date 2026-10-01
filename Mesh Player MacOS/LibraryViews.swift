@@ -689,6 +689,9 @@ struct AlbumDetailView: View {
     @State private var showNewPlaylistAlert = false
     @State private var newPlaylistName = ""
     @State private var pendingTracks: [LocalTrack] = []
+    @State private var showArtworkViewer = false
+    @State private var catalog: CatalogAlbumInfo?
+    @State private var showFullNotes = false
 
     private var albumTracks: [LocalTrack] { state.albumTracks(named: albumName) }
 
@@ -717,6 +720,9 @@ struct AlbumDetailView: View {
                     }
                     .frame(width: 232, height: 232)
                     .shadow(color: .black.opacity(theme.isDark ? 0.45 : 0.18), radius: 22, y: 10)
+                    .contentShape(Rectangle())
+                    .onTapGesture { if rep != nil { showArtworkViewer = true } }
+                    .help("View Artwork")
 
                     VStack(alignment: .leading, spacing: 8) {
                         Eyebrow(text: kind, color: theme.textSecondary)
@@ -735,6 +741,38 @@ struct AlbumDetailView: View {
                             if let rep {
                                 AudioQualityTagsView(track: rep, theme: theme)
                             }
+                        }
+                        if let notes = catalog?.notesShort ?? catalog?.notesStandard, !notes.isEmpty {
+                            // Apple Music's editor's notes for this album.
+                            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                                Text(notes)
+                                    .font(.system(size: 12.5))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(2)
+                                    .frame(maxWidth: 520, alignment: .leading)
+                                if catalog?.notesStandard != nil {
+                                    Button("MORE") { showFullNotes = true }
+                                        .buttonStyle(.plain)
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(theme.accent)
+                                        .popover(isPresented: $showFullNotes, arrowEdge: .bottom) {
+                                            ScrollView {
+                                                VStack(alignment: .leading, spacing: 10) {
+                                                    Text("Editor's Notes").font(.system(size: 14, weight: .bold))
+                                                    Text(catalog?.notesStandard ?? notes)
+                                                        .font(.system(size: 13))
+                                                        .textSelection(.enabled)
+                                                    Text("From Apple Music").font(.system(size: 11)).foregroundStyle(.secondary)
+                                                }
+                                                .padding(18)
+                                            }
+                                            .frame(width: 420)
+                                            .frame(maxHeight: 420)
+                                        }
+                                }
+                            }
+                            .padding(.top, 2)
+                            .transition(.opacity)
                         }
                         HStack(spacing: 8) {
                             Button {
@@ -869,6 +907,18 @@ struct AlbumDetailView: View {
         }
         .background(theme.background)
         .task(id: albumName) { await resolveCopyright() }
+        .task(id: albumName) {
+            guard let rep = albumTracks.first else { return }
+            let artist = rep.albumArtist ?? rep.artist
+            catalog = AppleMusicCatalog.shared.cachedAlbum(named: albumName, artist: artist)
+            let fetched = await AppleMusicCatalog.shared.album(named: albumName, artist: artist)
+            if !Task.isCancelled, fetched != catalog { withAnimation(.easeOut(duration: 0.2)) { catalog = fetched } }
+        }
+        .sheet(isPresented: $showArtworkViewer) {
+            if let rep = albumTracks.first {
+                ArtworkViewerSheet(track: rep, title: albumName, theme: state.theme)
+            }
+        }
         .alert("New Playlist", isPresented: $showNewPlaylistAlert) {
             TextField("Playlist Name", text: $newPlaylistName)
             Button("Create") {

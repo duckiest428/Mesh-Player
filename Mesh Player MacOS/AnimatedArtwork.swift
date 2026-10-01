@@ -128,3 +128,157 @@ struct AnimatedArtworkView: NSViewRepresentable {
         }
     }
 }
+
+/// Plays any motion artwork URL, muted and looping (used by the artwork viewer).
+struct LoopingVideoView: NSViewRepresentable {
+    let url: URL
+    var cornerRadius: CGFloat = 0
+    var gravity: AVLayerVideoGravity = .resizeAspect
+
+    func makeNSView(context: Context) -> AnimatedArtworkView.PlayerHostView {
+        let view = AnimatedArtworkView.PlayerHostView()
+        configure(view)
+        context.coordinator.play(url, in: view)
+        return view
+    }
+
+    func updateNSView(_ view: AnimatedArtworkView.PlayerHostView, context: Context) {
+        configure(view)
+        context.coordinator.play(url, in: view)
+    }
+
+    static func dismantleNSView(_ view: AnimatedArtworkView.PlayerHostView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    private func configure(_ view: AnimatedArtworkView.PlayerHostView) {
+        view.playerLayer.cornerRadius = cornerRadius
+        view.playerLayer.videoGravity = gravity
+    }
+
+    final class Coordinator {
+        private var url: URL?
+        private var player: AVPlayer?
+        private var loopObserver: NSObjectProtocol?
+        private var readyObservation: NSKeyValueObservation?
+
+        func play(_ url: URL, in host: AnimatedArtworkView.PlayerHostView) {
+            guard url != self.url else { return }
+            stop()
+            self.url = url
+            host.playerLayer.opacity = 0
+            let item = AVPlayerItem(url: url)
+            let player = AVPlayer(playerItem: item)
+            player.isMuted = true
+            player.preventsDisplaySleepDuringVideoPlayback = false
+            self.player = player
+            host.playerLayer.player = player
+            readyObservation = host.playerLayer.observe(\.isReadyForDisplay, options: [.new]) { layer, _ in
+                guard layer.isReadyForDisplay else { return }
+                DispatchQueue.main.async {
+                    CATransaction.begin()
+                    CATransaction.setAnimationDuration(0.4)
+                    layer.opacity = 1
+                    CATransaction.commit()
+                }
+            }
+            loopObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak player] _ in
+                player?.seek(to: .zero)
+                player?.play()
+            }
+            player.play()
+        }
+
+        func stop() {
+            readyObservation = nil
+            if let loopObserver { NotificationCenter.default.removeObserver(loopObserver) }
+            loopObserver = nil
+            player?.pause()
+            player = nil
+            url = nil
+        }
+    }
+}
+
+// MARK: - Artwork viewer
+
+/// Opened by clicking an album's cover: the full-size artwork, plus the square and tall motion
+/// artwork when Apple Music has them.
+struct ArtworkViewerSheet: View {
+    let track: LocalTrack
+    let title: String
+    let theme: ThemeColor
+    @Environment(\.dismiss) private var dismiss
+
+    enum Mode: String, CaseIterable, Identifiable {
+        case still = "Artwork"
+        case square = "Animated"
+        case tall = "Animated (Tall)"
+        var id: String { rawValue }
+    }
+
+    @State private var mode: Mode = .still
+    @State private var square: URL?
+    @State private var tall: URL?
+    @State private var lookedUp = false
+
+    private var modes: [Mode] {
+        [.still] + (square != nil ? [.square] : []) + (tall != nil ? [.tall] : [])
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 15, weight: .bold)).lineLimit(1)
+                    Text(lookedUp ? (modes.count > 1 ? "Motion artwork available" : "No motion artwork for this album") : "Looking for motion artwork…")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                Spacer()
+                if modes.count > 1 {
+                    Picker("", selection: $mode) {
+                        ForEach(modes) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(16)
+
+            ZStack {
+                Color.black
+                switch mode {
+                case .still:
+                    ArtworkView(track: track, pixelSize: 1600, cornerRadius: 0)
+                        .aspectRatio(1, contentMode: .fit)
+                case .square:
+                    if let square {
+                        LoopingVideoView(url: square)
+                            .aspectRatio(1, contentMode: .fit)
+                    }
+                case .tall:
+                    if let tall {
+                        LoopingVideoView(url: tall)
+                            .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 640, idealWidth: 760, minHeight: 700, idealHeight: 860)
+        .background(theme.background)
+        .task {
+            let videos = await AnimatedArtworkService.shared.videos(key: track.artworkKey, album: track.album, artist: track.albumArtist ?? track.artist,
+                                                                    localFolder: track.fileURL?.deletingLastPathComponent())
+            square = videos.square
+            tall = videos.tall
+            lookedUp = true
+        }
+    }
+}
