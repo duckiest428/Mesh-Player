@@ -1814,7 +1814,8 @@ struct StatCardOS: View {
 enum ContentZoom {
     static let key = "contentZoom"
     static let range: ClosedRange<Double> = 0.6...2.0
-    private static let steps: [Double] = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0]
+    /// Small 5% steps near normal size, larger ones further out.
+    private static let steps: [Double] = [0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5, 1.75, 2.0]
 
     static var current: Double { UserDefaults.standard.object(forKey: key) as? Double ?? 1 }
 
