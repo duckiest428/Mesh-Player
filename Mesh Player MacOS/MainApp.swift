@@ -42,19 +42,19 @@ struct macOSMusicPlayerContentView: View {
                     }
                     .contentZoom()
                     .background(theme.background)
-                    .toolbar {
-                        // Back sits at the top left of the page, in the window's title bar, like Apple Music.
-                        ToolbarItem(placement: .navigation) {
-                            Button {
-                                state.goBack()
-                            } label: {
-                                Image(systemName: "chevron.left")
-                            }
-                            .disabled(state.activeFilterType == nil)
-                            .help(state.activeFilterType == nil ? "Back" : "Back to \(state.backTitle)")
+                    .ignoresSafeArea(.container, edges: .top)
+                    .overlay(alignment: .topLeading) {
+                        // A floating Back button at the top left of the page, just below the title bar.
+                        // It's deliberately not a toolbar item: changing a toolbar item on every
+                        // navigation re-laid out the title bar, which sent AppKit into an endless
+                        // layout loop and crashed the app when clicking the sidebar.
+                        if state.activeFilterType != nil {
+                            BackButton(title: state.backTitle, theme: theme) { state.goBack() }
+                                .padding(.leading, 14)
+                                .padding(.top, 8)
+                                .transition(.opacity)
                         }
                     }
-                    .ignoresSafeArea(.container, edges: .top)
                 }
                 .toolbar(state.showFullscreenPlayer ? .hidden : .automatic, for: .windowToolbar)
                 .searchable(text: $state.searchKeyword, placement: .sidebar, prompt: "Search Library")
@@ -182,6 +182,30 @@ struct macOSMusicPlayerContentView: View {
     }
 }
 
+/// Round chevron that floats over the top left of a drill-down page.
+struct BackButton: View {
+    let title: String
+    let theme: ThemeColor
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.textPrimary)
+                .frame(width: 32, height: 32)
+                .background(.regularMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(theme.hairline, lineWidth: 1))
+                .brightness(hovering ? 0.06 : 0)
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressableStyle())
+        .onHover { hovering = $0 }
+        .help("Back to \(title)")
+    }
+}
+
 /// Picks the page for the current sidebar selection / drill-down.
 struct DetailRouter: View {
     @ObservedObject var state: AppStateManager
@@ -193,8 +217,8 @@ struct DetailRouter: View {
 
         content(tab: tab)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Drill-down pages start below the title bar's Back button.
-            .padding(.top, state.activeFilterType != nil ? 30 : 0)
+            // Drill-down pages start below the floating Back button.
+            .padding(.top, state.activeFilterType != nil ? 56 : 0)
             .background(theme.background)
     }
 
