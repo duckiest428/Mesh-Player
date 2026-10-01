@@ -268,7 +268,7 @@ struct ArtistCatalog {
         self.name = name
         let lower = name.lowercased()
         let library = state.libraryTracks
-        let songs = library.filter { $0.artist == name || $0.albumArtist == name }
+        let songs = library.filter { state.displayArtist($0.artist) == name || $0.albumArtist == name }
         self.songs = songs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         let mainIds = Set(songs.map(\.id))
         // "feat." credits and "A & B" collaborations.

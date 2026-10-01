@@ -440,8 +440,33 @@ class AppStateManager: ObservableObject {
         case "home": return "Home"
         case "getMusic": return "Get Music"
         case "meshReplay": return "Mesh Replay"
+        case "statistics": return "Statistics"
         default: return "Back"
         }
+    }
+
+    /// Lists "A & B" collaborations under the first artist (Settings › Library).
+    @Published var mergeCollaborationArtists: Bool = UserDefaults.standard.bool(forKey: "settings.mergeCollaborationArtists") {
+        didSet {
+            UserDefaults.standard.set(mergeCollaborationArtists, forKey: "settings.mergeCollaborationArtists")
+            derived.artists = nil
+            derived.albums = nil
+            derived.recentAlbums = nil
+            derived.stats = nil
+            objectWillChange.send()
+        }
+    }
+
+    /// The artist a song is listed under: with the merge setting on, "A & B", "A, B" and
+    /// "A feat. B" become "A".
+    func displayArtist(_ artist: String) -> String {
+        guard mergeCollaborationArtists else { return artist }
+        var name = artist
+        for separator in [" & ", ", ", " feat. ", " ft. ", " featuring ", " with ", " x ", " X "] {
+            if let range = name.range(of: separator) { name = String(name[..<range.lowerBound]) }
+        }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? artist : trimmed
     }
 
     /// A search for Get Music to run when it opens.
@@ -1486,7 +1511,7 @@ class AppStateManager: ObservableObject {
         validateDerived()
         if let cached = derived.artists { return cached }
         var dict: [String: [LocalTrack]] = [:]
-        for track in libraryTracks { dict[track.artist, default: []].append(track) }
+        for track in libraryTracks { dict[displayArtist(track.artist), default: []].append(track) }
         let result = dict.map { (key, list) in
             LocalArtist(name: key, tracksCount: list.count, trackRepresentative: list.first!)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -1512,8 +1537,8 @@ class AppStateManager: ObservableObject {
         var stats = LibraryStats()
         var artists = Set<String>(), albums = Set<String>(), genres = Set<String>()
         for t in libraryTracks {
-            artists.insert(t.artist)
-            albums.insert(t.album)
+            artists.insert(displayArtist(t.artist))
+            albums.insert(albumKey(for: t))
             genres.insert(t.genre)
             stats.plays += t.playCount
             stats.listeningSeconds += t.duration * Double(t.playCount)

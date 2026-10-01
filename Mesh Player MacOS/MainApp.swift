@@ -491,6 +491,8 @@ struct PreferencesView: View {
             settingsGroup(theme, title: "Your Library") {
                 Text("\(Fmt.songs(stats.songs)) · \(Fmt.count(stats.albums)) albums · \(Fmt.count(stats.artists)) artists · \(state.playlists.count) playlists")
                     .foregroundStyle(theme.textSecondary)
+                Toggle("List collaborations under the first artist", isOn: $state.mergeCollaborationArtists)
+                caption("Songs by “Kanye West & Kodak Black” or “Drake feat. Rihanna” appear under Kanye West or Drake in Artists instead of getting their own entry.", theme)
                 HStack(spacing: 8) {
                     Button("Show Mesh Library in Finder") {
                         NSWorkspace.shared.activateFileViewerSelecting([LibraryManager.shared.libraryDirectory])
