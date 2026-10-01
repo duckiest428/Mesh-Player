@@ -4,6 +4,14 @@
 <dict>
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/</string>
+	</array>
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/Volumes/</string>
+	</array>
 	<key>com.apple.security.temporary-exception.sbpl</key>
 	<string>(allow network-outbound (literal "/private/var/run/usbmuxd"))</string>
 	<key>com.apple.security.temporary-exception.apple-events</key>
