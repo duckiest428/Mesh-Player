@@ -182,7 +182,7 @@ struct TrackMenuItems: View {
         if let track = tracks.first, tracks.count == 1 {
             Button(track.isFavorite ? "Remove from Favorites" : "Add to Favorites") { state.toggleFavorite(track: track) }
             Divider()
-            Button("Go to Album") { state.showAlbum(track.album) }
+            Button("Go to Album") { state.showAlbum(of: track) }
             Button("Go to Artist") { state.showArtist(track.artist) }
         }
         Divider()
@@ -210,9 +210,9 @@ struct AlbumShelf: View {
             LazyHStack(alignment: .top, spacing: 20) {
                 ForEach(albums) { album in
                     AlbumCell(album: album, theme: theme, subtitle: subtitle(album)) {
-                        state.showAlbum(album.name)
+                        state.showAlbum(album.key)
                     } onPlay: {
-                        state.play(state.albumTracks(named: album.name), engine: engine)
+                        state.play(state.albumTracks(named: album.key), engine: engine)
                     }
                     .frame(width: 170)
                 }
@@ -276,26 +276,26 @@ struct ArtistCatalog {
             !mainIds.contains(track.id) && Self.credits(track.artist).contains(lower)
         }
 
-        let byName = Dictionary(state.albumsList.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
-        let ownAlbumNames = Set(songs.map(\.album))
-        let own = ownAlbumNames.compactMap { byName[$0] }.filter { album in
-            album.artist == name || Self.credits(album.artist).contains(lower) || songs.contains { $0.album == album.name && $0.albumArtist == nil }
+        let byKey = Dictionary(state.albumsList.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        let ownAlbumKeys = Set(songs.map { state.albumKey(for: $0) })
+        let own = ownAlbumKeys.compactMap { byKey[$0] }.filter { album in
+            album.artist == name || Self.credits(album.artist).contains(lower) || songs.contains { state.albumKey(for: $0) == album.key && $0.albumArtist == nil }
         }
         let isSingle: (LocalAlbum) -> Bool = { album in
             if album.name.hasSuffix(" - Single") || album.name.hasSuffix(" - EP") { return true }
-            let titles = Set(state.albumTracks(named: album.name).map { AnimatedArtworkService.normalize($0.title).lowercased() })
+            let titles = Set(state.albumTracks(named: album.key).map { AnimatedArtworkService.normalize($0.title).lowercased() })
             return album.tracksCount <= 3 && titles.contains(AnimatedArtworkService.normalize(album.name).lowercased())
         }
         let newestFirst: (LocalAlbum, LocalAlbum) -> Bool = { ($0.yearRecorded ?? 0, $0.name) > ($1.yearRecorded ?? 0, $1.name) }
         albums = own.filter { !isSingle($0) }.sorted(by: newestFirst)
         singles = own.filter(isSingle).sorted(by: newestFirst)
-        let ownNames = Set(own.map(\.name))
-        appearsOn = Set(appearsOnSongs.map(\.album)).subtracting(ownNames).compactMap { byName[$0] }.sorted(by: newestFirst)
+        let ownKeys = Set(own.map(\.key))
+        appearsOn = Set(appearsOnSongs.map { state.albumKey(for: $0) }).subtracting(ownKeys).compactMap { byKey[$0] }.sorted(by: newestFirst)
 
         mostPlayedSongs = Array(songs.filter { $0.playCount > 0 }.sorted { $0.playCount > $1.playCount }.prefix(30))
         var albumPlays: [String: Int] = [:]
-        for track in songs { albumPlays[track.album, default: 0] += track.playCount }
-        mostPlayedAlbums = own.filter { (albumPlays[$0.name] ?? 0) > 0 }.sorted { (albumPlays[$0.name] ?? 0) > (albumPlays[$1.name] ?? 0) }
+        for track in songs { albumPlays[state.albumKey(for: track), default: 0] += track.playCount }
+        mostPlayedAlbums = own.filter { (albumPlays[$0.key] ?? 0) > 0 }.sorted { (albumPlays[$0.key] ?? 0) > (albumPlays[$1.key] ?? 0) }
         totalPlays = songs.reduce(0) { $0 + $1.playCount }
 
         let allIds = mainIds.union(appearsOnSongs.map(\.id))
@@ -568,7 +568,7 @@ struct ArtistPageView: View {
 
     private func openEssential(_ album: CatalogAlbumInfo) {
         if let local = localAlbum(for: album) {
-            state.showAlbum(local.name)
+            state.showAlbum(local.key)
         } else {
             state.getMusicQuery = "\(album.name) \(album.artist)"
             state.selectedTab = "getMusic"
@@ -811,9 +811,9 @@ struct AlbumGridPage: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 170, maximum: 220), spacing: 22, alignment: .top)], alignment: .leading, spacing: 26) {
                     ForEach(albums) { album in
                         AlbumCell(album: album, theme: theme, subtitle: showArtist ? album.artist : (album.yearRecorded.map(String.init) ?? album.artist)) {
-                            state.showAlbum(album.name)
+                            state.showAlbum(album.key)
                         } onPlay: {
-                            state.play(state.albumTracks(named: album.name), engine: engine)
+                            state.play(state.albumTracks(named: album.key), engine: engine)
                         }
                     }
                 }

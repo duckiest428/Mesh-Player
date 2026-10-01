@@ -98,7 +98,7 @@ struct PlayerControlsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 if let track = engine.currentTrack {
                     LinkText(text: track.title, font: .system(size: 13, weight: .semibold), color: theme.textPrimary, hoverColor: theme.textPrimary) {
-                        state.showAlbum(track.album)
+                        state.showAlbum(of: track)
                     }
                     LinkText(text: track.artist, font: .system(size: 12), color: theme.textSecondary, hoverColor: theme.accent) {
                         state.showArtist(track.artist)
@@ -127,7 +127,7 @@ struct PlayerControlsView: View {
                 .help(isFav ? "Remove from Favorites" : "Add to Favorites")
 
                 Menu {
-                    Button("Go to Album") { state.showAlbum(track.album) }
+                    Button("Go to Album") { state.showAlbum(of: track) }
                     Button("Go to Artist") { state.showArtist(track.artist) }
                     Divider()
                     Menu("Add to Playlist") {
@@ -738,7 +738,7 @@ struct FullLyricsView: View {
         return VStack(spacing: 28 * min(scale, 1)) {
             Button {
                 if let track = engine.currentTrack {
-                    state.showAlbum(track.album)
+                    state.showAlbum(of: track)
                     isPresented = false
                 }
             } label: {

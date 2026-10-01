@@ -970,7 +970,7 @@ struct macOSMusicPlayerApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .option])
                 Divider()
                 Button("Go to Current Song") {
-                    if let track = engine.currentTrack { state.showAlbum(track.album) }
+                    if let track = engine.currentTrack { state.showAlbum(of: track) }
                 }
                 .keyboardShortcut("l", modifiers: .command)
                 Divider()
@@ -1161,9 +1161,9 @@ struct AlbumGridView: View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
             ForEach(albums) { album in
                 AlbumCell(album: album, theme: theme) {
-                    state.showAlbum(album.name)
+                    state.showAlbum(album.key)
                 } onPlay: {
-                    state.play(state.albumTracks(named: album.name), shuffled: false, engine: engine)
+                    state.play(state.albumTracks(named: album.key), shuffled: false, engine: engine)
                 }
             }
         }
@@ -1464,7 +1464,7 @@ struct HomeView: View {
                                     TrackCard(track: track, theme: theme) {
                                         state.play(carousel, startingAt: track, engine: engine)
                                     } onOpen: {
-                                        state.showAlbum(track.album)
+                                        state.showAlbum(of: track)
                                     }
                                     .frame(width: 156)
                                 }
@@ -1484,9 +1484,9 @@ struct HomeView: View {
                             LazyHStack(alignment: .top, spacing: 18) {
                                 ForEach(recentAlbums) { album in
                                     AlbumCell(album: album, theme: theme) {
-                                        state.showAlbum(album.name)
+                                        state.showAlbum(album.key)
                                     } onPlay: {
-                                        state.play(state.albumTracks(named: album.name), engine: engine)
+                                        state.play(state.albumTracks(named: album.key), engine: engine)
                                     }
                                     .frame(width: 156)
                                 }
@@ -1514,7 +1514,7 @@ struct HomeView: View {
                             TrackCard(track: item.track, theme: theme, badge: item.badgeTag) {
                                 state.play(recommendedItems.map(\.track), startingAt: item.track, engine: engine)
                             } onOpen: {
-                                state.showAlbum(item.track.album)
+                                state.showAlbum(of: item.track)
                             }
                         }
                     }

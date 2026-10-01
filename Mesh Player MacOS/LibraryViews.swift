@@ -401,7 +401,7 @@ struct SongTableView: View {
             if targets.count == 1 {
                 Button(first.isFavorite ? "Remove from Favorites" : "Add to Favorites") { state.toggleFavorite(track: first) }
                 Divider()
-                Button("Go to Album") { state.showAlbum(first.album) }
+                Button("Go to Album") { state.showAlbum(of: first) }
                 Button("Go to Artist") { state.showArtist(first.artist) }
             }
             Divider()
@@ -673,7 +673,9 @@ struct InteractiveText: View {
 struct AlbumDetailView: View {
     @ObservedObject var state: AppStateManager
     let engine: AudioEngineManager
+    /// Album key (the name, plus the album artist when two albums share a name).
     var albumName: String
+    private var title: String { AppStateManager.albumName(fromKey: albumName) }
 
     @State private var fetchedCopyright: String? = nil
     @State private var copyrightLookupDone = false
@@ -693,8 +695,8 @@ struct AlbumDetailView: View {
         let albumArtist = rep?.albumArtist ?? rep?.artist ?? "Unknown Artist"
         let isMultiDisc = (tracks.map(\.discNumber).max() ?? 1) > 1
         let totalSeconds = tracks.reduce(0) { $0 + $1.duration }
-        let displayName = albumName.replacingOccurrences(of: " - Single", with: "").replacingOccurrences(of: " - EP", with: "")
-        let kind = albumName.hasSuffix("Single") || tracks.count <= 2 ? "Single" : (albumName.hasSuffix("EP") || tracks.count <= 6 ? "EP" : "Album")
+        let displayName = title.replacingOccurrences(of: " - Single", with: "").replacingOccurrences(of: " - EP", with: "")
+        let kind = title.hasSuffix("Single") || tracks.count <= 2 ? "Single" : (title.hasSuffix("EP") || tracks.count <= 6 ? "EP" : "Album")
 
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -872,7 +874,7 @@ struct AlbumDetailView: View {
                 .padding(.top, 18)
 
                 // More by the artist
-                let others = state.albumsList.filter { $0.artist == albumArtist && $0.name != albumName }
+                let others = state.albumsList.filter { $0.artist == albumArtist && $0.key != albumName }
                 if !others.isEmpty {
                     SectionHeader(title: "More by \(albumArtist)", theme: theme) {
                         state.showArtist(rep?.artist ?? albumArtist)
@@ -882,9 +884,9 @@ struct AlbumDetailView: View {
                         LazyHStack(alignment: .top, spacing: 18) {
                             ForEach(others) { album in
                                 AlbumCell(album: album, theme: theme, subtitle: album.yearRecorded.map(String.init) ?? "Album") {
-                                    state.showAlbum(album.name)
+                                    state.showAlbum(album.key)
                                 } onPlay: {
-                                    state.play(state.albumTracks(named: album.name), engine: engine)
+                                    state.play(state.albumTracks(named: album.key), engine: engine)
                                 }
                                 .frame(width: 160)
                             }
@@ -901,13 +903,13 @@ struct AlbumDetailView: View {
         .task(id: albumName) {
             guard let rep = albumTracks.first else { return }
             let artist = rep.albumArtist ?? rep.artist
-            catalog = AppleMusicCatalog.shared.cachedAlbum(named: albumName, artist: artist)
-            let fetched = await AppleMusicCatalog.shared.album(named: albumName, artist: artist)
+            catalog = AppleMusicCatalog.shared.cachedAlbum(named: title, artist: artist)
+            let fetched = await AppleMusicCatalog.shared.album(named: title, artist: artist)
             if !Task.isCancelled, fetched != catalog { withAnimation(.easeOut(duration: 0.2)) { catalog = fetched } }
         }
         .sheet(isPresented: $showArtworkViewer) {
             if let rep = albumTracks.first {
-                ArtworkViewerSheet(track: rep, title: albumName, theme: state.theme)
+                ArtworkViewerSheet(track: rep, title: title, theme: state.theme)
             }
         }
         .alert("New Playlist", isPresented: $showNewPlaylistAlert) {

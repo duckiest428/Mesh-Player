@@ -251,7 +251,9 @@ nonisolated struct SmartPlaylistRules: Hashable, Codable {
 }
 
 struct LocalAlbum: Identifiable, Hashable {
-    var id: String { name }
+    var id: String { key }
+    /// Album key: the name, plus the album artist when another album shares the name.
+    let key: String
     let name: String
     let artist: String
     let tracksCount: Int
@@ -413,6 +415,7 @@ class AppStateManager: ObservableObject {
         guard let previous = backStack.last else { return Self.tabTitle(selectedTab) }
         if previous.tab == "search" && previous.filterType == nil { return "Search" }
         if let value = previous.filterValue {
+            if previous.filterType == "album" { return Self.albumName(fromKey: value) }
             if previous.filterType == "artistSection" || previous.filterType == "searchSection" {
                 return value.components(separatedBy: "\u{1}").last ?? "Back"
             }
@@ -510,12 +513,17 @@ class AppStateManager: ObservableObject {
         preserveSearchOnNavigation = false
     }
 
-    func showAlbum(_ name: String) {
-        open(tab: "albums", filter: "album", value: name)
+    /// Opens an album page by album key (see `albumKey(for:)`).
+    func showAlbum(_ key: String) {
+        open(tab: "albums", filter: "album", value: key)
+    }
+
+    func showAlbum(of track: LocalTrack) {
+        showAlbum(albumKey(for: track))
     }
 
     func showArtist(_ name: String) {
-        open(tab: "artists", filter: "artist", value: name)
+        open(tab: "artists", filter: "artist", value: displayArtist(name))
     }
 
     func showGenre(_ name: String) {
@@ -1196,7 +1204,7 @@ class AppStateManager: ObservableObject {
         guard !copyright.isEmpty else { return }
         var updated = tracks
         var changed = false
-        for i in updated.indices where updated[i].album == album && (updated[i].copyright ?? "").isEmpty {
+        for i in updated.indices where albumKey(for: updated[i]) == album && (updated[i].copyright ?? "").isEmpty {
             updated[i].copyright = copyright
             changed = true
         }
@@ -1348,6 +1356,8 @@ class AppStateManager: ObservableObject {
         var libraryTracks: [LocalTrack] = []
         var albums: [LocalAlbum]?
         var recentAlbums: [LocalAlbum]?
+        /// Track id → album key (see `albumKey(for:)`).
+        var albumKeys: [UUID: String]?
         var artists: [LocalArtist]?
         var genres: [LocalGenre]?
         var stats: LibraryStats?
@@ -1369,6 +1379,7 @@ class AppStateManager: ObservableObject {
             derived.trackIndexById = byId
             derived.trackIndexByPath = byPath
             derived.smart = [:]
+            derived.albumKeys = nil
             derived.exclusionVersion = ""
         }
         let exclusionKey = "\(libraryVersion)-\(playlistsVersion)"
@@ -1396,10 +1407,47 @@ class AppStateManager: ObservableObject {
 
     func isHiddenFromLibrary(_ id: UUID) -> Bool { validateDerived(); return derived.excludedIds.contains(id) }
 
-    /// Songs of one album in disc/track order (falls back to hidden songs when that's all there is).
-    func albumTracks(named album: String) -> [LocalTrack] {
-        var list = libraryTracks.filter { $0.album == album }
-        if list.isEmpty { list = tracks.filter { $0.album == album } }
+    /// Identifies an album. Usually just its name; when two different artists have an album with
+    /// the same name (two albums called "Loose"), the album artist is added after a \u{1}.
+    func albumKey(for track: LocalTrack) -> String {
+        validateDerived()
+        if derived.albumKeys == nil { derived.albumKeys = Self.computeAlbumKeys(tracks) }
+        return derived.albumKeys?[track.id] ?? track.album
+    }
+
+    /// The album name shown for an album key.
+    static func albumName(fromKey key: String) -> String {
+        key.components(separatedBy: "\u{1}").first ?? key
+    }
+
+    nonisolated private static func computeAlbumKeys(_ tracks: [LocalTrack]) -> [UUID: String] {
+        var keys: [UUID: String] = [:]
+        keys.reserveCapacity(tracks.count)
+        var byName: [String: [LocalTrack]] = [:]
+        for track in tracks { byName[track.album, default: []].append(track) }
+        for (name, list) in byName {
+            func owner(_ t: LocalTrack) -> String { (t.albumArtist?.isEmpty == false ? t.albumArtist! : t.artist) }
+            // Owners with at least two songs count as separate albums; a lone song by a guest
+            // artist (no album artist tag) joins the biggest one. Compilations stay together.
+            let counts = Dictionary(grouping: list, by: owner).mapValues(\.count)
+            let real = counts.filter { $0.value >= 2 }
+            guard real.count > 1 else {
+                for t in list { keys[t.id] = name }
+                continue
+            }
+            let largest = real.max { $0.value < $1.value }!.key
+            for t in list {
+                let o = owner(t)
+                keys[t.id] = name + "\u{1}" + (real[o] != nil ? o : largest)
+            }
+        }
+        return keys
+    }
+
+    /// Songs of one album (by album key) in disc/track order (falls back to hidden songs when that's all there is).
+    func albumTracks(named key: String) -> [LocalTrack] {
+        var list = libraryTracks.filter { albumKey(for: $0) == key }
+        if list.isEmpty { list = tracks.filter { albumKey(for: $0) == key } }
         return list.sorted {
             if $0.discNumber != $1.discNumber { return $0.discNumber < $1.discNumber }
             let a = $0.parsedTrackNumber, b = $1.parsedTrackNumber
@@ -1408,14 +1456,19 @@ class AppStateManager: ObservableObject {
         }
     }
 
+    private func groupedAlbums(representative: ([LocalTrack]) -> LocalTrack) -> [LocalAlbum] {
+        var dict: [String: [LocalTrack]] = [:]
+        for track in libraryTracks { dict[albumKey(for: track), default: []].append(track) }
+        return dict.map { (key, list) in
+            let owner = list.first(where: { $0.albumArtist?.isEmpty == false })?.albumArtist ?? list.first?.artist ?? "Unknown Artist"
+            return LocalAlbum(key: key, name: Self.albumName(fromKey: key), artist: displayArtist(owner), tracksCount: list.count, trackRepresentative: representative(list))
+        }
+    }
+
     var albumsList: [LocalAlbum] {
         validateDerived()
         if let cached = derived.albums { return cached }
-        var dict: [String: [LocalTrack]] = [:]
-        for track in libraryTracks { dict[track.album, default: []].append(track) }
-        let result = dict.map { (key, list) in
-            LocalAlbum(name: key, artist: list.first?.albumArtist ?? list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.first!)
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let result = groupedAlbums { $0.first! }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         derived.albums = result
         return result
     }
@@ -1423,11 +1476,8 @@ class AppStateManager: ObservableObject {
     var recentlyAddedAlbumsList: [LocalAlbum] {
         validateDerived()
         if let cached = derived.recentAlbums { return cached }
-        var dict: [String: [LocalTrack]] = [:]
-        for track in libraryTracks { dict[track.album, default: []].append(track) }
-        let result = dict.map { (key, list) in
-            LocalAlbum(name: key, artist: list.first?.albumArtist ?? list.first?.artist ?? "Unknown Artist", tracksCount: list.count, trackRepresentative: list.max(by: { $0.dateAdded < $1.dateAdded })!)
-        }.sorted { $0.trackRepresentative.dateAdded > $1.trackRepresentative.dateAdded }
+        let result = groupedAlbums { list in list.max(by: { $0.dateAdded < $1.dateAdded })! }
+            .sorted { $0.trackRepresentative.dateAdded > $1.trackRepresentative.dateAdded }
         derived.recentAlbums = result
         return result
     }
@@ -1496,7 +1546,7 @@ class AppStateManager: ObservableObject {
         // 1. First, check if there is an active sub-filter drill-down
         if let filterType = activeFilterType, let filterVal = activeFilterValue {
             if filterType == "album" {
-                sorted = sorted.filter { $0.album == filterVal }
+                sorted = sorted.filter { self.albumKey(for: $0) == filterVal }
             } else if filterType == "artist" {
                 sorted = sorted.filter { $0.artist == filterVal }
             } else if filterType == "genre" {
