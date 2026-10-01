@@ -181,81 +181,6 @@ struct AlbumsView: View {
     }
 }
 
-struct AlbumView: View {
-    let album: MobileAlbum
-    @EnvironmentObject var library: MobileLibrary
-    @EnvironmentObject var player: MobilePlayer
-
-    var body: some View {
-        let songs = library.albums.first(where: { $0.key == album.key })?.songs ?? album.songs
-        let multiDisc = Set(songs.map(\.info.discNumber)).count > 1
-        List {
-            Section {
-                VStack(spacing: 12) {
-                    ZStack {
-                        ArtworkImage(key: album.representative.artworkKey, size: 280, cornerRadius: 12, seed: album.title)
-                        MotionArtwork(song: album.representative)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .frame(width: 270, height: 270)
-                    .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
-                    .padding(.top, 8)
-                    VStack(spacing: 4) {
-                        Text(album.title).font(.title2.bold()).multilineTextAlignment(.center)
-                        NavigationLink(value: library.artists.first { $0.name == album.artist }) {
-                            Text(album.artist).font(.title3).foregroundStyle(.tint)
-                        }
-                        .buttonStyle(.plain)
-                        Text([album.genre, album.year.map(String.init)].compactMap { $0 }.joined(separator: " · "))
-                            .font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                        if let quality = album.representative.qualityLabel { QualityBadge(label: quality).padding(.top, 2) }
-                    }
-                    PlayShuffleButtons(songs: songs)
-                }
-                .frame(maxWidth: .infinity)
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-            }
-
-            Section {
-                ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
-                    VStack(alignment: .leading, spacing: 0) {
-                        if multiDisc && (index == 0 || songs[index - 1].info.discNumber != song.info.discNumber) {
-                            Text("Disc \(song.info.discNumber)").font(.subheadline.bold()).foregroundStyle(.secondary).padding(.vertical, 6)
-                        }
-                        Button { player.play(songs, startAt: song) } label: {
-                            SongRow(song: song, number: song.info.trackNumber > 0 ? song.info.trackNumber : index + 1,
-                                    subtitle: song.artist != album.artist ? song.artist : Format.time(song.duration))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .contextMenu { SongMenu(songs: [song]) }
-                    .swipeActions(edge: .leading) {
-                        Button { player.playNext([song]) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }.tint(.indigo)
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button { player.playLater([song]) } label: { Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") }.tint(.orange)
-                    }
-                }
-            } footer: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(Format.songs(songs.count)), \(Format.length(songs.reduce(0) { $0 + $1.duration }))")
-                    if let copyright = album.representative.info.copyright { Text(copyright) }
-                }
-                .font(.footnote)
-                .padding(.top, 8)
-            }
-        }
-        .listStyle(.plain)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            Menu {
-                SongMenu(songs: songs)
-            } label: { Image(systemName: "ellipsis") }
-        }
-    }
-}
-
 // MARK: - Artists
 
 struct ArtistsView: View {
@@ -275,61 +200,6 @@ struct ArtistsView: View {
         .listStyle(.plain)
         .navigationTitle("Artists")
         .searchable(text: $query, prompt: "Find in Artists")
-    }
-}
-
-struct ArtistView: View {
-    let artist: MobileArtist
-    @EnvironmentObject var library: MobileLibrary
-    @EnvironmentObject var player: MobilePlayer
-
-    var body: some View {
-        let albums = library.albums.filter { $0.artist == artist.name }.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
-        let top = artist.songs.sorted { $0.playCount > $1.playCount }
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                ZStack(alignment: .bottomLeading) {
-                    ArtworkImage(key: artist.songs.first?.artworkKey, size: 400, cornerRadius: 0, seed: artist.name)
-                        .frame(height: 300)
-                        .clipped()
-                    LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
-                    Text(artist.name).font(.largeTitle.bold()).foregroundStyle(.white).padding()
-                }
-                .frame(height: 300)
-
-                PlayShuffleButtons(songs: artist.songs).padding(.horizontal)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Top Songs").font(.title2.bold()).padding(.horizontal)
-                    ForEach(Array(top.prefix(6))) { song in
-                        Button { player.play(top, startAt: song) } label: {
-                            SongRow(song: song, subtitle: song.playCount > 0 ? "\(song.album) · \(song.playCount) play\(song.playCount == 1 ? "" : "s")" : song.album)
-                                .padding(.horizontal)
-                                .padding(.vertical, 4)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu { SongMenu(songs: [song]) }
-                    }
-                }
-
-                if !albums.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Albums").font(.title2.bold()).padding(.horizontal)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(spacing: 14) {
-                                ForEach(albums) { album in
-                                    NavigationLink(value: album) { AlbumTile(album: album) }.buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
-                }
-            }
-            .padding(.bottom, 24)
-        }
-        .ignoresSafeArea(edges: .top)
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -413,6 +283,29 @@ struct GenresView: View {
 
 // MARK: - Playlists
 
+struct GeneratedPlaylistCover: View {
+    let title: String
+    let artworkKey: String?
+    @State private var colors: [Color]?
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                LinearGradient(colors: [Color(white: 0.06), colors?.first ?? Color(white: 0.2), colors?.last ?? Color(white: 0.3)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                RadialGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadius: 0, endRadius: geo.size.width * 0.45)
+                Text(title)
+                    .font(.system(size: geo.size.width * 0.13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.5)
+                    .padding(geo.size.width * 0.08)
+            }
+        }
+        .task(id: artworkKey) { colors = await ArtworkPalette.colors(for: artworkKey, darken: 0.7) }
+    }
+}
+
 struct PlaylistsView: View {
     @EnvironmentObject var library: MobileLibrary
     @State private var showNew = false
@@ -426,8 +319,14 @@ struct PlaylistsView: View {
             ForEach(library.playlists) { playlist in
                 NavigationLink(value: playlist) {
                     HStack(spacing: 12) {
-                        PlaylistCoverView(songs: library.songs(of: playlist), isFavorites: playlist.isFavorites)
-                            .frame(width: 56, height: 56)
+                        Group {
+                            if let key = playlist.artworkKey {
+                                ArtworkImage(key: key, size: 56, cornerRadius: 8, seed: playlist.name)
+                            } else {
+                                PlaylistCoverView(songs: library.songs(of: playlist), isFavorites: playlist.isFavorites)
+                            }
+                        }
+                        .frame(width: 56, height: 56)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(playlist.name)
                             Text(Format.songs(library.songs(of: playlist).count)).font(.caption).foregroundStyle(.secondary)
@@ -454,8 +353,18 @@ struct PlaylistsView: View {
 struct PlaylistCoverView: View {
     let songs: [Song]
     var isFavorites = false
+    /// When set, draws Apple Music's generated cover: the playlist's colors with its name on top.
+    var title: String? = nil
 
     var body: some View {
+        if let title, !isFavorites {
+            GeneratedPlaylistCover(title: title, artworkKey: songs.first?.artworkKey)
+        } else {
+            mosaic
+        }
+    }
+
+    private var mosaic: some View {
         var seen = Set<String>()
         let keys = songs.map(\.artworkKey).filter { seen.insert($0).inserted }.prefix(4)
         return GeometryReader { geo in
@@ -482,95 +391,6 @@ struct PlaylistCoverView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-struct PlaylistView: View {
-    let playlistId: UUID
-    @EnvironmentObject var library: MobileLibrary
-    @EnvironmentObject var player: MobilePlayer
-    @State private var showAddSongs = false
-    @State private var renaming = false
-    @State private var newName = ""
-    @Environment(\.editMode) private var editMode
-
-    var body: some View {
-        if let playlist = library.playlists.first(where: { $0.id == playlistId }) {
-            let songs = library.songs(of: playlist)
-            List {
-                Section {
-                    VStack(spacing: 12) {
-                        PlaylistCoverView(songs: songs, isFavorites: playlist.isFavorites)
-                            .frame(width: 240, height: 240)
-                            .shadow(color: .black.opacity(0.2), radius: 14, y: 6)
-                        Text(playlist.name).font(.title2.bold())
-                        if !playlist.description.isEmpty {
-                            Text(playlist.description).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        }
-                        Text("\(Format.songs(songs.count)) · \(Format.length(songs.reduce(0) { $0 + $1.duration }))")
-                            .font(.caption).foregroundStyle(.secondary)
-                        PlayShuffleButtons(songs: songs)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
-                Section {
-                    ForEach(songs) { song in
-                        Button { player.play(songs, startAt: song) } label: { SongRow(song: song) }
-                            .buttonStyle(.plain)
-                            .contextMenu { SongMenu(songs: [song]) }
-                    }
-                    .onDelete { offsets in
-                        let ids = offsets.map { songs[$0].id }
-                        if playlist.isFavorites {
-                            for id in ids { library.toggleFavorite(id) }
-                        } else {
-                            library.updatePlaylist(playlist.id) { p in p.songIds.removeAll { ids.contains($0) } }
-                        }
-                    }
-                    .onMove(perform: playlist.isFavorites || playlist.isSmart ? nil : { from, to in
-                        library.updatePlaylist(playlist.id) { $0.songIds.move(fromOffsets: from, toOffset: to) }
-                    })
-                }
-            }
-            .listStyle(.plain)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if !playlist.isSmart && !playlist.isFavorites {
-                    ToolbarItem(placement: .topBarTrailing) { EditButton() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        if !playlist.isSmart && !playlist.isFavorites {
-                            Button { showAddSongs = true } label: { Label("Add Songs", systemImage: "plus") }
-                            Button { newName = playlist.name; renaming = true } label: { Label("Rename", systemImage: "pencil") }
-                        }
-                        Button { player.playNext(songs) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
-                        Button { player.playLater(songs) } label: { Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") }
-                        if !playlist.isFavorites {
-                            Divider()
-                            Button(role: .destructive) { library.deletePlaylist(playlist.id) } label: { Label("Delete Playlist", systemImage: "trash") }
-                        }
-                    } label: { Image(systemName: "ellipsis") }
-                }
-            }
-            .sheet(isPresented: $showAddSongs) { AddSongsSheet(playlistId: playlist.id) }
-            .alert("Rename Playlist", isPresented: $renaming) {
-                TextField("Name", text: $newName)
-                Button("Save") { if !newName.isEmpty { library.updatePlaylist(playlist.id) { $0.name = newName } } }
-                Button("Cancel", role: .cancel) {}
-            }
-            .overlay {
-                if songs.isEmpty {
-                    ContentUnavailableView(playlist.isFavorites ? "No Favorites Yet" : "Empty Playlist", systemImage: playlist.isFavorites ? "star" : "music.note.list",
-                                           description: Text(playlist.isFavorites ? "Tap the star on a song to add it here." : "Add songs from the ••• menu."))
-                        .padding(.top, 300)
-                }
-            }
-        } else {
-            ContentUnavailableView("Playlist Removed", systemImage: "music.note.list")
-        }
     }
 }
 
