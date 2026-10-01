@@ -685,6 +685,7 @@ struct AlbumDetailView: View {
     @State private var showArtworkViewer = false
     @State private var catalog: CatalogAlbumInfo?
     @State private var showFullNotes = false
+    @State private var pageWidth: CGFloat = 1000
 
     private var albumTracks: [LocalTrack] { state.albumTracks(named: albumName) }
 
@@ -698,38 +699,41 @@ struct AlbumDetailView: View {
         let displayName = title.replacingOccurrences(of: " - Single", with: "").replacingOccurrences(of: " - EP", with: "")
         let kind = title.hasSuffix("Single") || tracks.count <= 2 ? "Single" : (title.hasSuffix("EP") || tracks.count <= 6 ? "EP" : "Album")
 
+        // The header grows with the window, like Apple Music's album pages.
+        let art = min(max(pageWidth * 0.27, 260), 380)
+
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // Header
-                HStack(alignment: .bottom, spacing: 28) {
+                HStack(alignment: .bottom, spacing: 34) {
                     ZStack {
                         if let rep {
-                            ArtworkView(track: rep, pixelSize: 520, cornerRadius: 12)
+                            ArtworkView(track: rep, pixelSize: 800, cornerRadius: 14)
                             if state.animatedArtworkEnabled {
-                                AnimatedArtworkView(track: rep, cornerRadius: 12)
+                                AnimatedArtworkView(track: rep, cornerRadius: 14)
                                     .allowsHitTesting(false)
                             }
                         }
                     }
-                    .frame(width: 232, height: 232)
+                    .frame(width: art, height: art)
                     .shadow(color: .black.opacity(theme.isDark ? 0.45 : 0.18), radius: 22, y: 10)
                     .contentShape(Rectangle())
                     .onTapGesture { if rep != nil { showArtworkViewer = true } }
                     .help("View Artwork")
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 9) {
                         Eyebrow(text: kind, color: theme.textSecondary)
                         Text(displayName)
-                            .font(.system(size: 34, weight: .bold))
+                            .font(.system(size: 40, weight: .bold))
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(2)
-                        LinkText(text: albumArtist, font: .system(size: 20, weight: .semibold), color: theme.accent, hoverColor: theme.accent) {
+                        LinkText(text: albumArtist, font: .system(size: 24, weight: .semibold), color: theme.accent, hoverColor: theme.accent) {
                             state.showArtist(rep?.artist ?? albumArtist)
                         }
                         HStack(spacing: 6) {
-                            let pieces = [rep?.genre, rep?.year.map(String.init)].compactMap { $0 }.filter { !$0.isEmpty }
+                            let pieces = [rep?.genre, rep?.year.map(String.init)].compactMap { $0 }.filter { !$0.isEmpty && $0 != "Unknown Genre" }
                             Text((pieces + [Fmt.songs(tracks.count), Fmt.longDuration(totalSeconds)]).joined(separator: " · "))
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(theme.textSecondary)
                             if let rep {
                                 AudioQualityTagsView(track: rep, theme: theme)
@@ -739,14 +743,14 @@ struct AlbumDetailView: View {
                             // Apple Music's editor's notes for this album.
                             HStack(alignment: .lastTextBaseline, spacing: 6) {
                                 Text(notes)
-                                    .font(.system(size: 12.5))
+                                    .font(.system(size: 14))
                                     .foregroundStyle(theme.textSecondary)
                                     .lineLimit(2)
-                                    .frame(maxWidth: 520, alignment: .leading)
+                                    .frame(maxWidth: 600, alignment: .leading)
                                 if catalog?.notesStandard != nil {
                                     Button("MORE") { showFullNotes = true }
                                         .buttonStyle(.plain)
-                                        .font(.system(size: 11, weight: .bold))
+                                        .font(.system(size: 12, weight: .bold))
                                         .foregroundStyle(theme.accent)
                                         .popover(isPresented: $showFullNotes, arrowEdge: .bottom) {
                                             ScrollView {
@@ -767,20 +771,20 @@ struct AlbumDetailView: View {
                             .padding(.top, 2)
                             .transition(.opacity)
                         }
-                        HStack(spacing: 8) {
+                        HStack(spacing: 10) {
                             Button {
                                 state.play(tracks, shuffled: false, engine: engine)
                             } label: {
                                 Label("Play", systemImage: "play.fill")
                             }
-                            .buttonStyle(PillButtonStyle(kind: .primary, theme: theme))
+                            .buttonStyle(PillButtonStyle(kind: .primary, theme: theme, large: true))
 
                             Button {
                                 state.play(tracks, shuffled: true, engine: engine)
                             } label: {
                                 Label("Shuffle", systemImage: "shuffle")
                             }
-                            .buttonStyle(PillButtonStyle(kind: .secondary, theme: theme))
+                            .buttonStyle(PillButtonStyle(kind: .secondary, theme: theme, large: true))
 
                             Menu {
                                 Button("Play Next") { state.playNext(tracks, engine: engine) }
@@ -803,9 +807,9 @@ struct AlbumDetailView: View {
                                 }
                             } label: {
                                 Image(systemName: "ellipsis")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(size: 15, weight: .bold))
                                     .foregroundStyle(theme.accent)
-                                    .frame(width: 34, height: 34)
+                                    .frame(width: 40, height: 40)
                                     .background(theme.hover, in: Circle())
                             }
                             .menuStyle(.borderlessButton)
@@ -816,11 +820,11 @@ struct AlbumDetailView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, 30)
-                .padding(.bottom, 26)
+                .padding(.horizontal, 36)
+                .padding(.top, 36)
+                .padding(.bottom, 30)
                 .background(alignment: .top) {
-                    if let rep { ArtworkBackdrop(track: rep, theme: theme, height: 380) }
+                    if let rep { ArtworkBackdrop(track: rep, theme: theme, height: art + 180) }
                 }
 
                 // Tracks
@@ -828,8 +832,8 @@ struct AlbumDetailView: View {
                     ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                         if isMultiDisc && (index == 0 || tracks[index - 1].discNumber != track.discNumber) {
                             HStack {
-                                Image(systemName: "opticaldisc").font(.system(size: 11))
-                                Text("Disc \(track.discNumber)").font(.system(size: 12, weight: .bold))
+                                Image(systemName: "opticaldisc").font(.system(size: 13))
+                                Text("Disc \(track.discNumber)").font(.system(size: 14, weight: .bold))
                                 Spacer()
                             }
                             .foregroundStyle(theme.textSecondary)
@@ -858,7 +862,7 @@ struct AlbumDetailView: View {
                         )
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 22)
 
                 // Footer
                 VStack(alignment: .leading, spacing: 4) {
@@ -868,10 +872,10 @@ struct AlbumDetailView: View {
                     // Reserve the line while looking it up so the artist name never flashes in first.
                     Text(copyrightText(for: tracks) ?? " ")
                 }
-                .font(.system(size: 11))
+                .font(.system(size: 12.5))
                 .foregroundStyle(theme.textTertiary)
-                .padding(.horizontal, 28)
-                .padding(.top, 18)
+                .padding(.horizontal, 36)
+                .padding(.top, 20)
 
                 // More by the artist
                 let others = state.albumsList.filter { $0.artist == albumArtist && $0.key != albumName }
@@ -888,10 +892,10 @@ struct AlbumDetailView: View {
                                 } onPlay: {
                                     state.play(state.albumTracks(named: album.key), engine: engine)
                                 }
-                                .frame(width: 160)
+                                .frame(width: 190)
                             }
                         }
-                        .padding(.horizontal, 28)
+                        .padding(.horizontal, 36)
                         .padding(.vertical, 12)
                     }
                 }
@@ -899,6 +903,7 @@ struct AlbumDetailView: View {
             .padding(.bottom, 40)
         }
         .background(theme.background)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
         .task(id: albumName) { await resolveCopyright() }
         .task(id: albumName) {
             guard let rep = albumTracks.first else { return }
@@ -972,11 +977,11 @@ private struct AlbumTrackRow: View {
     var body: some View {
         let isCurrent = engine.currentTrack?.id == track.id
 
-        HStack(spacing: 14) {
+        HStack(spacing: 16) {
             ZStack {
                 if hovering {
                     Button(action: onPlay) {
-                        Image(systemName: "play.fill").font(.system(size: 11, weight: .bold))
+                        Image(systemName: "play.fill").font(.system(size: 13, weight: .bold))
                             .foregroundStyle(theme.textPrimary)
                     }
                     .buttonStyle(.plain)
@@ -984,24 +989,24 @@ private struct AlbumTrackRow: View {
                     AnimatedEQView(color: theme.accent, isPlaying: engine.isPlaying)
                 } else {
                     Text("\(number)")
-                        .font(.system(size: 12.5, weight: .medium).monospacedDigit())
+                        .font(.system(size: 14, weight: .medium).monospacedDigit())
                         .foregroundStyle(theme.textTertiary)
                 }
             }
-            .frame(width: 24, alignment: .trailing)
+            .frame(width: 28, alignment: .trailing)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(track.title)
-                        .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
+                        .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
                         .foregroundStyle(isCurrent ? theme.accent : theme.textPrimary)
                         .lineLimit(1)
                     if track.isAtmos {
-                        DolbyAtmosBadge(color: theme.textSecondary, scale: 0.6, showText: false)
+                        DolbyAtmosBadge(color: theme.textSecondary, scale: 0.7, showText: false)
                     }
                 }
                 if showArtist {
-                    LinkText(text: track.artist, font: .system(size: 11.5), color: theme.textSecondary, hoverColor: theme.accent, action: onShowArtist)
+                    LinkText(text: track.artist, font: .system(size: 13), color: theme.textSecondary, hoverColor: theme.accent, action: onShowArtist)
                 }
             }
 
@@ -1009,16 +1014,16 @@ private struct AlbumTrackRow: View {
 
             Button(action: onToggleFavorite) {
                 Image(systemName: track.isFavorite ? "heart.fill" : "heart")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(track.isFavorite ? theme.accent : theme.textSecondary)
             }
             .buttonStyle(.plain)
             .opacity(track.isFavorite || hovering ? 1 : 0)
 
             Text(Fmt.time(track.duration))
-                .font(.system(size: 12).monospacedDigit())
+                .font(.system(size: 14).monospacedDigit())
                 .foregroundStyle(theme.textSecondary)
-                .frame(width: 44, alignment: .trailing)
+                .frame(width: 50, alignment: .trailing)
 
             Menu {
                 Button("Play", action: onPlay)
@@ -1038,9 +1043,9 @@ private struct AlbumTrackRow: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(theme.textSecondary)
-                    .frame(width: 22, height: 22)
+                    .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -1049,13 +1054,13 @@ private struct AlbumTrackRow: View {
             .opacity(hovering ? 1 : 0)
         }
         .padding(.horizontal, 12)
-        .frame(height: showArtist ? 50 : 42)
+        .frame(height: showArtist ? 58 : 50)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isCurrent ? theme.accent.opacity(0.1) : (hovering ? theme.hover : .clear))
         )
         .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.hairline).frame(height: 1).padding(.leading, 50).opacity(hovering || isCurrent ? 0 : 1)
+            Rectangle().fill(theme.hairline).frame(height: 1).padding(.leading, 56).opacity(hovering || isCurrent ? 0 : 1)
         }
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: onPlay)

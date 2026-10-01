@@ -104,9 +104,10 @@ struct PillButtonStyle: ButtonStyle {
     var kind: Kind = .primary
     let theme: ThemeColor
     var compact = false
+    var large = false
 
     func makeBody(configuration: Configuration) -> some View {
-        PillBody(configuration: configuration, kind: kind, theme: theme, compact: compact)
+        PillBody(configuration: configuration, kind: kind, theme: theme, compact: compact, large: large)
     }
 
     private struct PillBody: View {
@@ -114,15 +115,16 @@ struct PillButtonStyle: ButtonStyle {
         let kind: Kind
         let theme: ThemeColor
         let compact: Bool
+        let large: Bool
         @State private var hovering = false
         @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
             configuration.label
-                .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                .font(.system(size: large ? 15 : (compact ? 12 : 13), weight: .semibold))
                 .labelStyle(PillLabelStyle())
-                .padding(.horizontal, compact ? 12 : 18)
-                .frame(height: compact ? 28 : 34)
+                .padding(.horizontal, large ? 24 : (compact ? 12 : 18))
+                .frame(height: large ? 40 : (compact ? 28 : 34))
                 .foregroundStyle(foreground)
                 .background(background, in: Capsule())
                 .overlay(Capsule().strokeBorder(kind == .ghost ? theme.hairline : .clear, lineWidth: 1))
