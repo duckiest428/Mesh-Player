@@ -354,6 +354,23 @@ enum Format {
 
     static func songs(_ n: Int) -> String { "\(n) song\(n == 1 ? "" : "s")" }
 
+    /// "12 hr 30 min" / "45 min" for listening totals.
+    static func listening(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        return minutes >= 60 ? "\(minutes / 60) hr \(minutes % 60) min" : "\(minutes) min"
+    }
+
+    /// "1 hour, 4 minutes" / "3 minutes", as Apple Music writes album lengths.
+    static func minutes(_ seconds: TimeInterval) -> String {
+        let total = Int((seconds / 60).rounded())
+        if total >= 60 {
+            let h = total / 60, m = total % 60
+            return "\(h) hour\(h == 1 ? "" : "s")" + (m > 0 ? ", \(m) minute\(m == 1 ? "" : "s")" : "")
+        }
+        let shown = max(1, total)
+        return "\(shown) minute\(shown == 1 ? "" : "s")"
+    }
+
     static func relative(_ date: Date) -> String {
         if Calendar.current.isDateInToday(date) { return "today" }
         if Calendar.current.isDateInYesterday(date) { return "yesterday" }

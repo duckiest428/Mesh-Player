@@ -22,6 +22,20 @@ struct HomeView: View {
                     EmptyLibraryCard(showImporter: $showImporter)
                         .padding(.horizontal)
                 } else {
+                    // Replay and Statistics.
+                    HStack(spacing: 12) {
+                        NavigationLink { ReplayView() } label: {
+                            InsightCard(title: "Replay \(String(Calendar.current.component(.year, from: Date())))", subtitle: "Your year so far", symbol: "sparkles",
+                                        colors: [Color(red: 0.98, green: 0.24, blue: 0.42), Color(red: 0.55, green: 0.18, blue: 0.85)])
+                        }
+                        NavigationLink { StatisticsView() } label: {
+                            InsightCard(title: "Statistics", subtitle: "\(library.playHistory.count.formatted()) plays", symbol: "chart.bar.fill",
+                                        colors: [Color(red: 0.2, green: 0.55, blue: 1.0), Color(red: 0.15, green: 0.75, blue: 0.65)])
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+
                     let recent = songs.filter { $0.info.lastPlayedDate != nil }
                         .sorted { $0.info.lastPlayedDate! > $1.info.lastPlayedDate! }
                     if !recent.isEmpty {
@@ -234,5 +248,25 @@ struct EmptyLibraryCard: View {
         case .syncing(let text): return text
         default: return "Starting…"
         }
+    }
+}
+
+struct InsightCard: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let colors: [Color]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: symbol).font(.title2.weight(.bold))
+            Spacer(minLength: 0)
+            Text(title).font(.headline).lineLimit(1)
+            Text(subtitle).font(.caption.weight(.medium)).opacity(0.85).lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 110, alignment: .leading)
+        .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
