@@ -1172,3 +1172,170 @@ struct SearchSectionView: View {
         }
     }
 }
+
+// MARK: - Genre page
+
+/// A genre's page: a colored header, then its most played songs, albums, artists, recent
+/// additions and every song.
+struct GenrePageView: View {
+    @ObservedObject var state: AppStateManager
+    let engine: AudioEngineManager
+    let name: String
+
+    var body: some View {
+        let theme = state.theme
+        let tint = GenreStyle.tint(for: name)
+        let m = makeModel()
+        let songs = m.songs, albums = m.albums, artists = m.artists, topAlbums = m.topAlbums, topArtists = m.topArtists
+        let mostPlayed = m.mostPlayed, recent = m.recent, allSongs = m.allSongs, totalPlays = m.totalPlays, minutes = m.minutes
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 34) {
+                // Header
+                ZStack(alignment: .bottomLeading) {
+                    LinearGradient(colors: [tint, tint.opacity(0.55), theme.background], startPoint: .topLeading, endPoint: .bottom)
+                    GenreCoverFan(tracks: topAlbums.prefix(3).map(\.trackRepresentative), size: 150)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.trailing, 48)
+                        .padding(.bottom, 40)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Eyebrow(text: "Genre", color: .white.opacity(0.8))
+                        Text(name)
+                            .font(.system(size: 50, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                        Text("\(Fmt.songs(songs.count)) · \(albums.count) album\(albums.count == 1 ? "" : "s") · \(artists.count) artist\(artists.count == 1 ? "" : "s") · \(minutes) min\(totalPlays > 0 ? " · \(Fmt.count(totalPlays)) plays" : "")")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                        HStack(spacing: 8) {
+                            Button { state.play(allSongs, shuffled: false, engine: engine) } label: { Label("Play", systemImage: "play.fill") }
+                                .buttonStyle(PillButtonStyle(kind: .primary, theme: theme))
+                            Button { state.play(allSongs, shuffled: true, engine: engine) } label: { Label("Shuffle", systemImage: "shuffle") }
+                                .buttonStyle(PillButtonStyle(kind: .ghost, theme: ThemeCatalog.theme(named: "True Black")))
+                        }
+                        .padding(.top, 4)
+                        .disabled(songs.isEmpty)
+                    }
+                    .padding(28)
+                }
+                .frame(height: 300)
+                .environment(\.colorScheme, .dark)
+
+                if !mostPlayed.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Most Played", theme: theme)
+                        SongShelf(state: state, engine: engine, tracks: Array(mostPlayed.prefix(12))) { track in
+                            "\(track.artist) · \(Fmt.count(track.playCount)) play\(track.playCount == 1 ? "" : "s")"
+                        }
+                    }
+                }
+                if !topAlbums.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Albums", theme: theme)
+                        AlbumShelf(state: state, engine: engine, albums: topAlbums) { $0.artist }
+                    }
+                }
+                if !topArtists.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Artists", theme: theme)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 22) {
+                                ForEach(topArtists) { artist in
+                                    ArtistCircle(name: artist.name, representative: artist.trackRepresentative, theme: theme, size: 130) {
+                                        state.showArtist(artist.name)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 6)
+                        }
+                    }
+                }
+                if recent.count > 1 {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Recently Added", theme: theme)
+                        AlbumShelf(state: state, engine: engine, albums: Array(recent.prefix(12))) { album in
+                            "Added \(Fmt.relative(album.trackRepresentative.dateAdded))"
+                        }
+                    }
+                }
+                if !allSongs.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "All Songs", theme: theme) {
+                            state.open(tab: "genres", filter: "genreSongs", value: name)
+                        }
+                        SongShelf(state: state, engine: engine, tracks: Array(allSongs.prefix(24)))
+                    }
+                }
+            }
+            .padding(.bottom, 48)
+        }
+        .background(theme.background)
+    }
+    private struct Model {
+        var songs: [LocalTrack] = []
+        var albums: [LocalAlbum] = []
+        var artists: [LocalArtist] = []
+        var topAlbums: [LocalAlbum] = []
+        var topArtists: [LocalArtist] = []
+        var mostPlayed: [LocalTrack] = []
+        var recent: [LocalAlbum] = []
+        var allSongs: [LocalTrack] = []
+        var totalPlays = 0
+        var minutes = 0
+    }
+
+    private func makeModel() -> Model {
+        let songs = state.libraryTracks.filter { $0.genre == name }
+        let albumKeys = Set(songs.map { state.albumKey(for: $0) })
+        let albums = state.albumsList.filter { albumKeys.contains($0.key) }
+        var plays: [String: Int] = [:]
+        for track in songs { plays[state.albumKey(for: track), default: 0] += track.playCount }
+        let topAlbums = albums.sorted { (plays[$0.key] ?? 0, $0.name) > (plays[$1.key] ?? 0, $1.name) }
+        let artistNames = Set(songs.map { state.displayArtist($0.artist) })
+        let artists = state.artistsList.filter { artistNames.contains($0.name) }
+        var artistPlays: [String: Int] = [:]
+        for track in songs { artistPlays[state.displayArtist(track.artist), default: 0] += track.playCount }
+        let topArtists = artists.sorted { (artistPlays[$0.name] ?? 0) > (artistPlays[$1.name] ?? 0) }
+        let mostPlayed = songs.filter { $0.playCount > 0 }.sorted { $0.playCount > $1.playCount }
+        let recent = albums.sorted { $0.trackRepresentative.dateAdded > $1.trackRepresentative.dateAdded }
+        let allSongs = songs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        let totalPlays = songs.reduce(0) { $0 + $1.playCount }
+        let minutes = Int(songs.reduce(0) { $0 + $1.duration } / 60)
+
+        return Model(songs: songs, albums: albums, artists: artists, topAlbums: topAlbums, topArtists: topArtists, mostPlayed: mostPlayed,
+                     recent: recent, allSongs: allSongs, totalPlays: totalPlays, minutes: minutes)
+    }
+
+}
+
+enum GenreStyle {
+    static let tints: [Color] = [
+        Color(red: 0.93, green: 0.27, blue: 0.40), Color(red: 0.36, green: 0.45, blue: 0.98), Color(red: 0.98, green: 0.55, blue: 0.20),
+        Color(red: 0.15, green: 0.70, blue: 0.60), Color(red: 0.62, green: 0.40, blue: 0.95), Color(red: 0.90, green: 0.35, blue: 0.75),
+        Color(red: 0.20, green: 0.60, blue: 0.90), Color(red: 0.55, green: 0.70, blue: 0.25)
+    ]
+
+    static func tint(for genre: String) -> Color {
+        tints[Int(UInt(bitPattern: genre.utf8.reduce(7) { ($0 &* 31) &+ Int($1) }) % UInt(tints.count))]
+    }
+}
+
+/// Up to three album covers fanned out, used on genre tiles and the genre header.
+struct GenreCoverFan: View {
+    let tracks: [LocalTrack]
+    var size: CGFloat = 70
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(tracks.enumerated().reversed()), id: \.offset) { index, track in
+                ArtworkView(track: track, pixelSize: size * 2, cornerRadius: size * 0.08)
+                    .frame(width: size, height: size)
+                    .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
+                    .rotationEffect(.degrees(Double(index) * 9 - 4))
+                    .offset(x: CGFloat(index) * -size * 0.32, y: CGFloat(index) * size * 0.04)
+            }
+        }
+    }
+}

@@ -212,6 +212,13 @@ struct DetailRouter: View {
             case "artist":
                 ArtistPageView(state: state, engine: engine, name: value)
                     .id(value)
+            case "genre":
+                GenrePageView(state: state, engine: engine, name: value)
+                    .id(value)
+            case "genreSongs":
+                TrackListPage(state: state, engine: engine, title: "Songs", subtitle: value,
+                              tracks: state.libraryTracks.filter { $0.genre == value }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending })
+                    .id(value)
             case "artistSection":
                 let parts = value.components(separatedBy: "\u{1}")
                 if parts.count == 2, let section = ArtistSection(rawValue: parts[0]) {
@@ -1276,53 +1283,23 @@ struct ArtistGridView: View {
 struct GenreGridView: View {
     @ObservedObject var state: AppStateManager
 
-    private let columns = [GridItem(.adaptive(minimum: 210, maximum: 300), spacing: 18)]
-    private static let tints: [Color] = [
-        Color(red: 0.93, green: 0.27, blue: 0.40), Color(red: 0.36, green: 0.45, blue: 0.98), Color(red: 0.98, green: 0.55, blue: 0.20),
-        Color(red: 0.15, green: 0.70, blue: 0.60), Color(red: 0.62, green: 0.40, blue: 0.95), Color(red: 0.90, green: 0.35, blue: 0.75),
-        Color(red: 0.20, green: 0.60, blue: 0.90), Color(red: 0.55, green: 0.70, blue: 0.25)
-    ]
+    private let columns = [GridItem(.adaptive(minimum: 250, maximum: 340), spacing: 20)]
 
     var body: some View {
         let theme = state.theme
         let query = state.searchKeyword.trimmingCharacters(in: .whitespaces)
-        let genres = query.isEmpty ? state.genresList : state.genresList.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        let genres = state.genresList.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+        let covers = coverTracks()
 
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                PageHeader(title: "Genres", subtitle: "\(Fmt.count(genres.count)) genres", theme: theme)
+                PageHeader(title: "Genres", subtitle: "\(Fmt.count(genres.count)) genres", theme: theme) { EmptyView() }
 
-                LazyVGrid(columns: columns, spacing: 18) {
+                LazyVGrid(columns: columns, spacing: 20) {
                     ForEach(genres) { genre in
-                        let tint = Self.tints[Int(UInt(bitPattern: genre.name.utf8.reduce(7) { ($0 &* 31) &+ Int($1) }) % UInt(Self.tints.count))]
-                        Button {
+                        GenreTile(genre: genre, covers: covers[genre.name] ?? [genre.trackRepresentative]) {
                             state.showGenre(genre.name)
-                        } label: {
-                            ZStack(alignment: .topLeading) {
-                                LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                                ArtworkView(track: genre.trackRepresentative, pixelSize: 180, cornerRadius: 8)
-                                    .frame(width: 74, height: 74)
-                                    .rotationEffect(.degrees(18))
-                                    .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                                    .offset(x: 14, y: 12)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(genre.name)
-                                        .font(.system(size: 17, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .lineLimit(2)
-                                    Text(Fmt.songs(genre.tracksCount))
-                                        .font(.system(size: 11.5, weight: .medium))
-                                        .foregroundStyle(.white.opacity(0.8))
-                                }
-                                .padding(14)
-                            }
-                            .frame(height: 112)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-                        .hoverLift(1.03)
                     }
                 }
                 .padding(.horizontal, 28)
@@ -1330,6 +1307,68 @@ struct GenreGridView: View {
             .padding(.bottom, 32)
         }
         .background(theme.background)
+    }
+
+    /// Covers of each genre's three most played albums.
+    private func coverTracks() -> [String: [LocalTrack]] {
+        var byGenre: [String: [String: (track: LocalTrack, plays: Int)]] = [:]
+        for track in state.libraryTracks {
+            let key = state.albumKey(for: track)
+            var albums = byGenre[track.genre, default: [:]]
+            let current = albums[key]
+            albums[key] = (current?.track ?? track, (current?.plays ?? 0) + track.playCount)
+            byGenre[track.genre] = albums
+        }
+        return byGenre.mapValues { albums in
+            albums.values.sorted { $0.plays > $1.plays }.prefix(3).map(\.track)
+        }
+    }
+}
+
+private struct GenreTile: View {
+    let genre: LocalGenre
+    let covers: [LocalTrack]
+    let onOpen: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        let tint = GenreStyle.tint(for: genre.name)
+        ZStack(alignment: .topLeading) {
+            Color.black
+            LinearGradient(colors: [tint, tint.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            // Soft glow behind the covers.
+            Circle()
+                .fill(.white.opacity(0.18))
+                .frame(width: 160, height: 160)
+                .blur(radius: 40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .offset(x: 30, y: 40)
+            GenreCoverFan(tracks: covers, size: 78)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .padding(.trailing, 18)
+                .padding(.bottom, 16)
+                .scaleEffect(hovering ? 1.05 : 1, anchor: .bottomTrailing)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(genre.name)
+                    .font(.system(size: 19, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
+                Text(Fmt.songs(genre.tracksCount))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .padding(16)
+            .frame(maxWidth: 150, alignment: .leading)
+        }
+        .frame(height: 140)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+        .shadow(color: tint.opacity(hovering ? 0.45 : 0.2), radius: hovering ? 16 : 8, y: 6)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { hovering = $0 }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: hovering)
     }
 }
 
