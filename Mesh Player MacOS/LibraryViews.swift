@@ -1167,6 +1167,7 @@ struct SidebarView: View {
             Section("Discover") {
                 row("Get Music", icon: "arrow.down.circle.fill", tag: "getMusic")
                 row("Mesh Replay", icon: "sparkles", tag: "meshReplay")
+                row("Statistics", icon: "chart.bar.fill", tag: "statistics")
             }
 
             Section {

@@ -250,6 +250,8 @@ struct DetailRouter: View {
                 GetMusicView(state: state)
             case "search":
                 SearchResultsView(state: state, engine: engine)
+            case "statistics":
+                StatisticsView(state: state, engine: engine)
             case "allPlaylists":
                 AllPlaylistsView(state: state)
             default:
@@ -1487,6 +1489,11 @@ struct HomeView: View {
                 PageHeader(title: Fmt.greeting(), subtitle: Date().formatted(date: .complete, time: .omitted), theme: theme)
                     .padding(.bottom, -18)
 
+                SectionHeader(title: "Your Stats", theme: theme) {
+                    state.selectedTab = "statistics"
+                }
+                .padding(.bottom, -22)
+
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
                     StatCardOS(title: "Songs", value: Fmt.count(stats.songs), icon: "music.note", gradientColors: [Color(red: 0.99, green: 0.33, blue: 0.47), Color(red: 0.85, green: 0.2, blue: 0.35)], theme: theme)
                     StatCardOS(title: "Albums", value: Fmt.count(stats.albums), icon: "square.stack.fill", gradientColors: [Color(red: 1.0, green: 0.62, blue: 0.25), Color(red: 0.95, green: 0.42, blue: 0.2)], theme: theme)
@@ -1494,6 +1501,9 @@ struct HomeView: View {
                     StatCardOS(title: "Plays", value: Fmt.count(stats.plays), icon: "play.fill", gradientColors: [Color(red: 0.2, green: 0.78, blue: 0.62), Color(red: 0.1, green: 0.6, blue: 0.5)], theme: theme)
                     StatCardOS(title: "Listening time", value: "~" + Fmt.listening(stats.listeningSeconds), icon: "clock.fill", gradientColors: [Color(red: 0.3, green: 0.6, blue: 1.0), Color(red: 0.2, green: 0.42, blue: 0.9)], theme: theme)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { state.selectedTab = "statistics" }
+                .help("Open Statistics")
                 .padding(.horizontal, 28)
 
                 if !carousel.isEmpty {
