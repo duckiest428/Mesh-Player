@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import Combine
 import SwiftUI
 import UIKit
 
@@ -18,7 +19,8 @@ struct ArtworkImage: View {
     var seed: String = ""
 
     @State private var image: UIImage?
-    @ObservedObject private var cache = ArtworkCache.shared
+    @State private var reload = 0
+    private var cache: ArtworkCache { .shared }
 
     var body: some View {
         ZStack {
@@ -30,9 +32,15 @@ struct ArtworkImage: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
-        .task(id: "\(key ?? "")#\(cache.revision)") {
+        .task(id: "\(key ?? "")#\(reload)") {
             guard let key else { image = nil; return }
             image = await cache.image(key, size: size)
+        }
+        .onReceive(cache.changes) { keys in
+            // Reload only when this cover's file changed (nil = everything changed).
+            guard let key, keys?.contains(key) ?? true else { return }
+            image = nil
+            reload &+= 1
         }
     }
 

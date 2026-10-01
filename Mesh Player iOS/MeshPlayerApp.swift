@@ -107,8 +107,8 @@ struct SyncBanner: View {
                     ProgressView()
                     VStack(alignment: .leading, spacing: 2) {
                         Text(text).font(.subheadline.weight(.semibold))
-                        if sync.filesTotal > 0 {
-                            Text("\(sync.filesDone) of \(sync.filesTotal) · \(ByteCountFormatter.string(fromByteCount: sync.bytesDone, countStyle: .file))")
+                        if progress.filesTotal > 0 {
+                            Text("\(progress.filesDone) of \(progress.filesTotal) · \(ByteCountFormatter.string(fromByteCount: progress.bytesDone, countStyle: .file))")
                                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         }
                     }

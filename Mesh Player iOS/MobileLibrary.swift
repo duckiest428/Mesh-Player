@@ -364,27 +364,47 @@ final class MobileLibrary: ObservableObject {
         save()
     }
 
-    func registerFile(for id: UUID, at url: URL) {
-        guard let idx = songs.firstIndex(where: { $0.id == id }) else {
-            try? FileManager.default.removeItem(at: url)
-            return
+    /// Adds files received during a sync. Called in batches so the library (and every screen
+    /// showing it) updates a few times a second at most, not once per file.
+    func registerReceived(files: [(id: UUID, url: URL)], artwork: [(key: String, url: URL)]) {
+        let fm = FileManager.default
+        if !files.isEmpty {
+            var updated = songs
+            let index = Dictionary(updated.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+            for file in files {
+                guard let idx = index[file.id] else {
+                    try? fm.removeItem(at: file.url)
+                    continue
+                }
+                let name = file.id.uuidString + "." + updated[idx].info.fileExtension
+                let destination = Self.musicFolder.appendingPathComponent(name)
+                try? fm.removeItem(at: destination)
+                do {
+                    try fm.moveItem(at: file.url, to: destination)
+                    updated[idx].fileName = name
+                } catch {
+                    print("Couldn't store synced file: \(error)")
+                }
+            }
+            songs = updated
+            save() // keep what arrived if the sync is cut off
         }
-        let name = id.uuidString + "." + songs[idx].info.fileExtension
-        let destination = Self.musicFolder.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: destination)
-        do {
-            try FileManager.default.moveItem(at: url, to: destination)
-            songs[idx].fileName = name
-        } catch {
-            print("Couldn't store synced file: \(error)")
+        if !artwork.isEmpty {
+            for art in artwork {
+                let destination = Self.artworkURL(for: art.key)
+                try? fm.removeItem(at: destination)
+                try? fm.moveItem(at: art.url, to: destination)
+            }
+            ArtworkCache.shared.invalidate(Set(artwork.map(\.key)))
         }
     }
 
-    func registerArtwork(key: String, at url: URL) {
-        let destination = Self.artworkURL(for: key)
-        try? FileManager.default.removeItem(at: destination)
-        try? FileManager.default.moveItem(at: url, to: destination)
-        ArtworkCache.shared.invalidate(key)
+    /// Removes partly received files left by a sync that was cut off.
+    func clearIncoming() {
+        let folder = Self.incomingFolder
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
     }
 
     /// Ends a sync: removes songs that are no longer part of it and remembers the Mac.
@@ -501,11 +521,13 @@ final class MobileLibrary: ObservableObject {
 
 // MARK: - Artwork
 
-final class ArtworkCache: ObservableObject {
+final class ArtworkCache {
     static let shared = ArtworkCache()
     private let cache = NSCache<NSString, UIImage>()
-    /// Bumped when artwork arrives during a sync so visible covers reload.
-    @Published private(set) var revision = 0
+    /// Decoded sizes per key, so one cover can be dropped without clearing the rest.
+    private var sizes: [String: Set<Int>] = [:]
+    /// Keys whose file just arrived or changed; nil means everything changed.
+    let changes = PassthroughSubject<Set<String>?, Never>()
 
     init() { cache.countLimit = 400 }
 
@@ -528,18 +550,25 @@ final class ArtworkCache: ObservableObject {
             guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
             return UIImage(cgImage: cg)
         }.value
-        if let image { cache.setObject(image, forKey: "\(key)@\(Int(size))" as NSString) }
+        if let image {
+            cache.setObject(image, forKey: "\(key)@\(Int(size))" as NSString)
+            sizes[key, default: []].insert(Int(size))
+        }
         return image
     }
 
-    func invalidate(_ key: String) {
-        // Sizes vary; clearing everything is cheap and only happens during syncs.
-        cache.removeAllObjects()
-        revision &+= 1
+    /// Only covers showing one of these keys reload.
+    func invalidate(_ keys: Set<String>) {
+        guard !keys.isEmpty else { return }
+        for key in keys {
+            for size in sizes.removeValue(forKey: key) ?? [] { cache.removeObject(forKey: "\(key)@\(size)" as NSString) }
+        }
+        changes.send(keys)
     }
 
     func removeAll() {
         cache.removeAllObjects()
-        revision &+= 1
+        sizes = [:]
+        changes.send(nil)
     }
 }

@@ -30,13 +30,12 @@ final class SyncServer: ObservableObject {
     }
 
     @Published private(set) var status: Status = .stopped
-    @Published private(set) var filesDone = 0
-    @Published private(set) var filesTotal = 0
-    @Published private(set) var bytesDone: Int64 = 0
-    @Published private(set) var bytesTotal: Int64 = 0
     @Published var approval: ApprovalRequest?
+    /// iOS drops every connection from the Mac until Mesh Player is allowed Local Network access.
+    @Published private(set) var localNetworkDenied = false
 
     private var listener: NWListener?
+    private var probe: NWBrowser?
     private var active: SyncChannel?
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -153,6 +152,9 @@ final class SyncServer: ObservableObject {
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Mesh Sync") { [weak self] in
             self?.active?.close()
         }
+        // Auto-Lock would suspend the app and cut the sync off.
+        UIApplication.shared.isIdleTimerDisabled = true
+        MobileLibrary.shared.clearIncoming()
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -165,6 +167,8 @@ final class SyncServer: ObservableObject {
             }
             channel.close()
             self.active = nil
+            UIApplication.shared.isIdleTimerDisabled = false
+            MobileLibrary.shared.clearIncoming()
             UIApplication.shared.endBackgroundTask(self.backgroundTask)
             self.backgroundTask = .invalid
             try? await Task.sleep(for: .seconds(6))
@@ -197,39 +201,109 @@ final class SyncServer: ObservableObject {
         status = .syncing("Syncing with \(mac.name)")
         library.applyManifest(manifest)
 
+        // Files stream in off the main thread; the library and progress update a few times a second.
+        let progress = SyncProgress.shared
+        progress.reset()
+        let receiver = SyncReceiver(channel: channel)
+        try await Task.detached(priority: .userInitiated) {
+            try await receiver.run { batch in
+                await MainActor.run {
+                    progress.update(batch.progress)
+                    library.registerReceived(files: batch.files, artwork: batch.artwork)
+                }
+            }
+        }.value
+
+        let summary = library.finishSync(manifest: manifest)
+        try await channel.send(.complete(summary))
+        return summary
+    }
+}
+
+/// Sync progress, kept apart from SyncServer so only the progress banner redraws while files arrive.
+final class SyncProgress: ObservableObject {
+    static let shared = SyncProgress()
+    @Published private(set) var filesDone = 0
+    @Published private(set) var filesTotal = 0
+    @Published private(set) var bytesDone: Int64 = 0
+    @Published private(set) var bytesTotal: Int64 = 0
+
+    func reset() { update(SyncProgressInfo(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0)) }
+
+    func update(_ info: SyncProgressInfo) {
+        if filesDone != info.filesDone { filesDone = info.filesDone }
+        if filesTotal != info.filesTotal { filesTotal = info.filesTotal }
+        if bytesDone != info.bytesDone { bytesDone = info.bytesDone }
+        if bytesTotal != info.bytesTotal { bytesTotal = info.bytesTotal }
+    }
+}
+
+/// Writes incoming files to disk on a background thread and hands them over in batches.
+nonisolated final class SyncReceiver: @unchecked Sendable {
+    struct Batch: Sendable {
+        var files: [(id: UUID, url: URL)] = []
+        var artwork: [(key: String, url: URL)] = []
+        var progress: SyncProgressInfo
+    }
+
+    private let channel: SyncChannel
+
+    init(channel: SyncChannel) {
+        self.channel = channel
+    }
+
+    /// Returns when the Mac says it has sent everything.
+    func run(deliver: @Sendable (Batch) async -> Void) async throws {
+        var progress = SyncProgressInfo(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0)
+        var files: [(id: UUID, url: URL)] = []
+        var artwork: [(key: String, url: URL)] = []
         var current: (header: SyncFileHeader, url: URL, handle: FileHandle)?
+        var lastProgress = Date.distantPast
+        var lastBatch = Date()
+        defer { try? current?.handle.close() }
+
+        func flush(force: Bool) async {
+            let now = Date()
+            let batchDue = !(files.isEmpty && artwork.isEmpty) && (force || now.timeIntervalSince(lastBatch) > 2 || artwork.count >= 200)
+            guard force || batchDue || now.timeIntervalSince(lastProgress) > 0.25 else { return }
+            await deliver(Batch(files: batchDue ? files : [], artwork: batchDue ? artwork : [], progress: progress))
+            lastProgress = now
+            if batchDue {
+                files.removeAll()
+                artwork.removeAll()
+                lastBatch = now
+            }
+        }
+
         while true {
             switch try await channel.next() {
             case .message(.progress(let info)):
-                filesTotal = info.filesTotal
-                bytesTotal = info.bytesTotal
-                filesDone = info.filesDone
-                bytesDone = info.bytesDone
+                progress = info
             case .message(.fileBegin(let header)):
                 let url = MobileLibrary.incomingFolder.appendingPathComponent(UUID().uuidString + "." + header.fileExtension)
                 FileManager.default.createFile(atPath: url.path, contents: nil)
                 current = (header, url, try FileHandle(forWritingTo: url))
             case .chunk(let data):
                 try current?.handle.write(contentsOf: data)
-                if current?.header.kind == .audio { bytesDone += Int64(data.count) }
+                if current?.header.kind == .audio { progress.bytesDone += Int64(data.count) }
             case .message(.fileEnd):
                 guard let file = current else { break }
                 try? file.handle.close()
+                current = nil
                 switch file.header.kind {
                 case .audio:
-                    if let id = UUID(uuidString: file.header.id) { library.registerFile(for: id, at: file.url) }
+                    if let id = UUID(uuidString: file.header.id) { files.append((id, file.url)) }
                 case .artwork:
-                    library.registerArtwork(key: file.header.id, at: file.url)
+                    artwork.append((file.header.id, file.url))
                 }
-                current = nil
-                filesDone += 1
+                progress.filesDone += 1
             case .message(.finished):
-                let summary = library.finishSync(manifest: manifest)
-                try await channel.send(.complete(summary))
-                return summary
+                await flush(force: true)
+                return
             default:
                 break
             }
+            await flush(force: false)
         }
     }
 }
