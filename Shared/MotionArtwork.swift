@@ -26,7 +26,7 @@ nonisolated final class AnimatedArtworkService: @unchecked Sendable {
     private let session: URLSession
 
     private static let videoExtensions: Set<String> = ["mp4", "m4v", "mov"]
-    private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Mesh Player", isDirectory: true)
@@ -150,7 +150,7 @@ nonisolated final class AnimatedArtworkService: @unchecked Sendable {
     }
 
     /// The public token music.apple.com's web player ships in its JavaScript bundle.
-    private func developerToken() async -> String? {
+    func developerToken() async -> String? {
         let defaults = UserDefaults.standard
         if let cached = defaults.string(forKey: "appleMusicWebToken"),
            let expiry = Self.expiry(of: cached), expiry.timeIntervalSinceNow > 86_400 {
