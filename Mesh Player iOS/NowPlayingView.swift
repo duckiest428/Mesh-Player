@@ -18,6 +18,11 @@ struct NowPlayingView: View {
     @State private var panel: Panel = .artwork
     @State private var colors: [Color] = [Color(white: 0.2), Color(white: 0.08)]
     @State private var dragOffset: CGFloat = 0
+    /// Full-screen (tall) motion artwork for the current album, when Apple Music has one.
+    @State private var tallVideo: URL?
+    @AppStorage("animatedArtwork") private var animatedArtwork = true
+
+    private var showsTallArtwork: Bool { animatedArtwork && tallVideo != nil && panel == .artwork }
 
     enum Panel { case artwork, lyrics, queue }
 
@@ -28,14 +33,36 @@ struct NowPlayingView: View {
                     .ignoresSafeArea()
                     .animation(.easeInOut(duration: 0.8), value: colors)
 
+                if animatedArtwork, let tallVideo {
+                    // Like Apple Music: the tall video fills the screen behind the controls.
+                    MotionArtworkView(url: tallVideo)
+                        .ignoresSafeArea()
+                        .overlay {
+                            LinearGradient(stops: [
+                                .init(color: .black.opacity(0.35), location: 0),
+                                .init(color: .clear, location: 0.18),
+                                .init(color: .clear, location: 0.5),
+                                .init(color: .black.opacity(0.8), location: 1)
+                            ], startPoint: .top, endPoint: .bottom)
+                            .ignoresSafeArea()
+                        }
+                        .opacity(panel == .artwork ? 1 : 0.35)
+                        .animation(.easeInOut(duration: 0.4), value: panel)
+                        .transition(.opacity)
+                }
+
                 VStack(spacing: 0) {
                     Capsule().fill(.white.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
 
                     Group {
                         switch panel {
                         case .artwork:
-                            artwork(width: min(geo.size.width - 48, 380))
-                                .frame(maxHeight: .infinity)
+                            if showsTallArtwork {
+                                Spacer(minLength: 0)
+                            } else {
+                                artwork(width: min(geo.size.width - 48, 380))
+                                    .frame(maxHeight: .infinity)
+                            }
                         case .lyrics:
                             compactHeader.padding(.top, 20)
                             LyricsPanel()
@@ -63,6 +90,11 @@ struct NowPlayingView: View {
         }
         .environment(\.colorScheme, .dark)
         .task(id: player.current?.artworkKey) { await updateColors() }
+        .task(id: player.current?.artworkKey) {
+            guard animatedArtwork, let song = player.current else { tallVideo = nil; return }
+            let videos = await AnimatedArtworkService.shared.videos(key: song.artworkKey, album: song.album, artist: song.albumArtist, localFolder: nil)
+            withAnimation(.easeInOut(duration: 0.5)) { tallVideo = videos.tall }
+        }
     }
 
     // MARK: Artwork
