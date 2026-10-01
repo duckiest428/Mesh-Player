@@ -19,6 +19,7 @@ struct macOSMusicPlayerContentView: View {
     @ObservedObject private var importer = LibraryImporter.shared
     @ObservedObject private var appleMusicSync = AppleMusicSync.shared
     @State private var isDropTargeted = false
+    @State private var tabBeforeSearch: String?
 
     var body: some View {
         let theme = state.theme
@@ -123,13 +124,26 @@ struct macOSMusicPlayerContentView: View {
         }
     }
 
-    /// Typing in the sidebar search jumps to Songs from pages that can't show results themselves.
+    /// Typing in the sidebar search opens the search results (Songs and playlists filter their
+    /// list in place instead). Clearing the search goes back to where you were.
     private func routeSearch(_ query: String) {
-        guard !query.isEmpty else { return }
         let tab = state.selectedTab ?? "home"
-        let searchable = tab == "songs" || tab.hasPrefix("playlist-") || ["albums", "artists", "genres"].contains(tab)
-        if !searchable || state.activeFilterType != nil {
-            state.navigate(to: "songs", keepingSearch: true)
+        if query.isEmpty {
+            if tab == "search", state.activeFilterType == nil {
+                state.navigate(to: tabBeforeSearch ?? "home", keepingSearch: false)
+            }
+            return
+        }
+        if tab == "search", state.activeFilterType != nil {
+            // Typing on a search "See All" page shows the new results.
+            state.activeFilterType = nil
+            state.activeFilterValue = nil
+            return
+        }
+        let filtersInPlace = (tab == "songs" || tab.hasPrefix("playlist-") || tab == "allPlaylists") && state.activeFilterType == nil
+        if !filtersInPlace && tab != "search" {
+            if tab != "search" { tabBeforeSearch = tab }
+            state.navigate(to: "search", keepingSearch: true)
         }
     }
 
@@ -227,20 +241,13 @@ struct DetailRouter: View {
                 MeshReplayView(state: state, stats: Self.replayStats(for: state))
             case "getMusic":
                 GetMusicView(state: state)
+            case "search":
+                SearchResultsView(state: state, engine: engine)
+            case "allPlaylists":
+                AllPlaylistsView(state: state)
             default:
                 HomeView(state: state, engine: engine)
             }
-        }
-    }
-
-    private func backTitle(for tab: String) -> String {
-        switch tab {
-        case "albums": return "Albums"
-        case "artists": return "Artists"
-        case "genres": return "Genres"
-        case "songs": return "All Songs"
-        case "recently-added": return "Recently Added"
-        default: return "Back"
         }
     }
 

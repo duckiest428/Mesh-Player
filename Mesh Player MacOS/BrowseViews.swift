@@ -906,3 +906,269 @@ private struct TrackListRow: View {
         .contextMenu { TrackMenuItems(state: state, engine: engine, tracks: [track]) }
     }
 }
+
+// MARK: - Search
+
+/// Apple Music–style search results: artists, albums, songs and playlists from the library, or
+/// the Apple Music catalog (downloads go through Get Music).
+struct SearchResultsView: View {
+    @ObservedObject var state: AppStateManager
+    let engine: AudioEngineManager
+    @ObservedObject private var downloader = AmdlDownloader.shared
+
+    enum Scope: String, CaseIterable, Identifiable {
+        case library = "Library"
+        case appleMusic = "Apple Music"
+        var id: String { rawValue }
+    }
+
+    @AppStorage("search.scope") private var scope: Scope = .library
+    @State private var catalogResults: [CatalogItem] = []
+    @State private var isSearchingCatalog = false
+
+    private var query: String { state.searchKeyword.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        let theme = state.theme
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Search")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(theme.textPrimary)
+                    Text(query.isEmpty ? "Type in the search field to find music" : "Results for “\(query)”")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                Spacer()
+                Picker("", selection: $scope) {
+                    ForEach(Scope.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 26)
+            .padding(.bottom, 14)
+
+            switch scope {
+            case .library: libraryResults(theme)
+            case .appleMusic: catalogSection(theme)
+            }
+        }
+        .background(theme.background)
+        .task(id: scope == .appleMusic ? query : "") {
+            guard scope == .appleMusic, query.count >= 2 else { catalogResults = []; return }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            isSearchingCatalog = true
+            let found = await CatalogSearch.search(query)
+            guard !Task.isCancelled else { return }
+            catalogResults = found
+            isSearchingCatalog = false
+        }
+    }
+
+    // MARK: Library
+
+    @ViewBuilder
+    private func libraryResults(_ theme: ThemeColor) -> some View {
+        let results = SearchMatches(query: query, state: state)
+        if results.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(theme.textTertiary)
+                Text(query.isEmpty ? "Search your library" : "No results in your library")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+                if !query.isEmpty {
+                    Button("Search Apple Music") { scope = .appleMusic }
+                        .buttonStyle(PillButtonStyle(kind: .secondary, theme: theme, compact: true))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 32) {
+                    if !results.artists.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionHeader(title: "Artists", theme: theme) { seeAll(.artists) }
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                LazyHStack(alignment: .top, spacing: 22) {
+                                    ForEach(results.artists.prefix(16)) { artist in
+                                        ArtistCircle(name: artist.name, representative: artist.trackRepresentative, theme: theme, size: 150) {
+                                            state.showArtist(artist.name)
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal, 28)
+                                .padding(.vertical, 6)
+                            }
+                        }
+                    }
+                    if !results.albums.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionHeader(title: "Albums", theme: theme) { seeAll(.albums) }
+                            AlbumShelf(state: state, engine: engine, albums: Array(results.albums.prefix(16))) { $0.artist }
+                        }
+                    }
+                    if !results.songs.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionHeader(title: "Songs", theme: theme) { seeAll(.songs) }
+                            SongShelf(state: state, engine: engine, tracks: Array(results.songs.prefix(24)))
+                        }
+                    }
+                    if !results.playlists.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionHeader(title: "Playlists", theme: theme) { seeAll(.playlists) }
+                            PlaylistShelf(state: state, playlists: Array(results.playlists.prefix(16)))
+                        }
+                    }
+                    if !results.genres.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionHeader(title: "Genres", theme: theme)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(results.genres) { genre in
+                                        Button(genre.name) { state.showGenre(genre.name) }
+                                            .buttonStyle(PillButtonStyle(kind: .secondary, theme: theme, compact: true))
+                                    }
+                                }
+                                .padding(.horizontal, 28)
+                            }
+                        }
+                    }
+                }
+                .padding(.bottom, 40)
+            }
+        }
+    }
+
+    private func seeAll(_ kind: SearchSection) {
+        state.open(tab: "search", filter: "searchSection", value: kind.rawValue + "\u{1}" + query)
+    }
+
+    // MARK: Apple Music
+
+    @ViewBuilder
+    private func catalogSection(_ theme: ThemeColor) -> some View {
+        if catalogResults.isEmpty {
+            VStack(spacing: 10) {
+                if isSearchingCatalog {
+                    ProgressView()
+                } else {
+                    Image(systemName: "applelogo")
+                        .font(.system(size: 34))
+                        .foregroundStyle(theme.textTertiary)
+                    Text(query.count >= 2 ? "No results on Apple Music" : "Search the Apple Music catalog")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                    Text("Download anything with am-dl and it's added to your library automatically.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textTertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(catalogResults) { item in
+                        CatalogRow(item: item, theme: theme, inLibrary: state.hasCatalogItem(item), job: downloader.jobs.first { $0.item.id == item.id }) {
+                            downloader.enqueue(item, state: state)
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 32)
+            }
+            .onAppear { downloader.prepare() }
+        }
+    }
+}
+
+enum SearchSection: String {
+    case artists, albums, songs, playlists
+
+    var title: String { rawValue.capitalized }
+}
+
+/// Library matches for a search, best matches first (name starts with the query, then a word
+/// starts with it, then it appears anywhere).
+struct SearchMatches {
+    let artists: [LocalArtist]
+    let albums: [LocalAlbum]
+    let songs: [LocalTrack]
+    let playlists: [Playlist]
+    let genres: [LocalGenre]
+
+    var isEmpty: Bool { artists.isEmpty && albums.isEmpty && songs.isEmpty && playlists.isEmpty && genres.isEmpty }
+
+    init(query: String, state: AppStateManager) {
+        let q = query.lowercased()
+        guard !q.isEmpty else {
+            artists = []; albums = []; songs = []; playlists = []; genres = []
+            return
+        }
+        func rank(_ text: String) -> Int? {
+            let t = text.lowercased()
+            if t.hasPrefix(q) { return 0 }
+            if t.range(of: " " + q) != nil || t.range(of: "(" + q) != nil { return 1 }
+            if t.contains(q) { return 2 }
+            return nil
+        }
+        func ranked<T>(_ items: [T], _ text: (T) -> String, _ secondary: ((T) -> String)? = nil) -> [T] {
+            items.compactMap { item -> (T, Int)? in
+                if let r = rank(text(item)) { return (item, r) }
+                if let secondary, let r = rank(secondary(item)) { return (item, r + 3) }
+                return nil
+            }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+        }
+        artists = ranked(state.artistsList, \.name)
+        albums = ranked(state.albumsList, \.name, \.artist)
+        songs = ranked(state.libraryTracks, \.title) { "\($0.artist) \($0.album)" }
+        playlists = ranked(state.playlists, \.name)
+        genres = ranked(state.genresList, \.name)
+    }
+}
+
+struct SearchSectionView: View {
+    @ObservedObject var state: AppStateManager
+    let engine: AudioEngineManager
+    let section: SearchSection
+    let query: String
+
+    var body: some View {
+        let theme = state.theme
+        let results = SearchMatches(query: query, state: state)
+        switch section {
+        case .songs:
+            TrackListPage(state: state, engine: engine, title: "Songs", subtitle: "“\(query)”", tracks: results.songs)
+        case .albums:
+            AlbumGridPage(state: state, engine: engine, title: "Albums", subtitle: "“\(query)”", albums: results.albums, showArtist: true)
+        case .artists, .playlists:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    PageHeader(title: section.title, subtitle: "“\(query)”", theme: theme) { EmptyView() }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 210), spacing: 22, alignment: .top)], alignment: .leading, spacing: 26) {
+                        if section == .artists {
+                            ForEach(results.artists) { artist in
+                                ArtistCircle(name: artist.name, representative: artist.trackRepresentative, theme: theme, size: 150) {
+                                    state.showArtist(artist.name)
+                                }
+                            }
+                        } else {
+                            ForEach(results.playlists) { PlaylistCell(state: state, playlist: $0, theme: theme) }
+                        }
+                    }
+                    .padding(.horizontal, 28)
+                }
+                .padding(.bottom, 32)
+            }
+            .background(theme.background)
+        }
+    }
+}

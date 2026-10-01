@@ -659,17 +659,25 @@ struct GetMusicView: View {
     }
 
     private func isInLibrary(_ item: CatalogItem) -> Bool {
+        state.hasCatalogItem(item)
+    }
+}
+
+extension AppStateManager {
+    /// Whether a catalog result already seems to be in the library.
+    func hasCatalogItem(_ item: CatalogItem) -> Bool {
+        let leadArtist = item.artist.components(separatedBy: " & ").first ?? item.artist
         switch item.kind {
         case .album:
             let name = AnimatedArtworkService.normalize(item.title)
-            return state.albumsList.contains { AnimatedArtworkService.normalize($0.name).caseInsensitiveCompare(name) == .orderedSame && $0.artist.localizedCaseInsensitiveContains(item.artist.components(separatedBy: " & ").first ?? item.artist) }
+            return albumsList.contains { AnimatedArtworkService.normalize($0.name).caseInsensitiveCompare(name) == .orderedSame && $0.artist.localizedCaseInsensitiveContains(leadArtist) }
         default:
-            return state.tracks.contains { $0.title.caseInsensitiveCompare(item.title) == .orderedSame && $0.artist.localizedCaseInsensitiveContains(item.artist.components(separatedBy: " & ").first ?? item.artist) }
+            return tracks.contains { $0.title.caseInsensitiveCompare(item.title) == .orderedSame && $0.artist.localizedCaseInsensitiveContains(leadArtist) }
         }
     }
 }
 
-private struct CatalogRow: View {
+struct CatalogRow: View {
     let item: CatalogItem
     let theme: ThemeColor
     let inLibrary: Bool
@@ -738,7 +746,7 @@ private struct CatalogRow: View {
     }
 }
 
-private struct JobBadge: View {
+struct JobBadge: View {
     let job: AmdlDownloader.Job
     let theme: ThemeColor
 
