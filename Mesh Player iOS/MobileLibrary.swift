@@ -291,6 +291,7 @@ final class MobileLibrary: ObservableObject {
         guard let idx = songs.firstIndex(where: { $0.id == id }) else { return }
         songs[idx].info.isFavorite.toggle()
         songs[idx].favoriteChanged = true
+        MobileLastFM.shared.setLoved(songs[idx], loved: songs[idx].info.isFavorite)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         save()
     }

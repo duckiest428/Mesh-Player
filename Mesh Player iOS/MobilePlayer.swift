@@ -36,6 +36,9 @@ final class MobilePlayer: ObservableObject {
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var countedPlay = false
+    private var scrobbled = false
+    private var startedAt = Date()
+    private static let fadeLength: TimeInterval = 6
     private var library: MobileLibrary { .shared }
     private var nowPlayingArtwork: MPMediaItemArtwork?
 
@@ -208,6 +211,10 @@ final class MobilePlayer: ObservableObject {
         }
         current = song
         countedPlay = false
+        scrobbled = false
+        startedAt = Date()
+        player.volume = crossfade ? 0 : 1
+        MobileLastFM.shared.nowPlaying(song)
         clock.time = 0
         lyrics = LyricsEngine.parse(lyricsText: song.info.lyrics, duration: song.duration)
         let item = AVPlayerItem(url: url)
@@ -238,9 +245,20 @@ final class MobilePlayer: ObservableObject {
     private func tick(_ seconds: TimeInterval) {
         guard seconds.isFinite else { return }
         clock.time = seconds
-        if !countedPlay, let current, current.duration > 0, seconds >= current.duration / 2 {
+        guard let current, current.duration > 0 else { return }
+        if !countedPlay, seconds >= current.duration / 2 {
             countedPlay = true
             library.recordPlay(current.id)
+        }
+        // Last.fm's rule: half the song or 4 minutes, whichever comes first.
+        if !scrobbled, seconds >= min(current.duration / 2, 240) {
+            scrobbled = true
+            MobileLastFM.shared.scrobble(current, startedAt: startedAt)
+        }
+        if crossfade {
+            let fadeIn = min(seconds / 2, 1)
+            let fadeOut = min(max((current.duration - seconds) / Self.fadeLength, 0), 1)
+            player.volume = Float(min(fadeIn, fadeOut))
         }
     }
 
