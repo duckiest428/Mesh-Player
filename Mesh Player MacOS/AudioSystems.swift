@@ -41,6 +41,8 @@ class AudioEngineManager: ObservableObject {
     var onTrackStarted: ((LocalTrack) -> Void)?
     /// The song reached Last.fm's scrobble point: half its length or 4 minutes.
     var onScrobblePoint: ((LocalTrack, Date) -> Void)?
+    /// The user jumped to a new position in the song.
+    var onSeek: ((TimeInterval) -> Void)?
     var onTrackMetadataUpdated: ((LocalTrack) -> Void)?
     @Published var currentTrack: LocalTrack?
     @Published var parsedLyrics: [SyncedLyricLine] = []
@@ -349,6 +351,7 @@ class AudioEngineManager: ObservableObject {
         timeTracker.currentTime = max(0, min(time, duration))
         let targetCMTime = CMTime(seconds: timeTracker.currentTime, preferredTimescale: 60000)
         player?.seek(to: targetCMTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        onSeek?(timeTracker.currentTime)
         
         updateNowPlayingInfo()
     }

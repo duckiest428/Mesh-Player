@@ -277,6 +277,7 @@ struct PreferencesView: View {
     @ObservedObject var state: AppStateManager
     @Binding var isPresented: Bool
     @ObservedObject private var lastFM = LastFMService.shared
+    @ObservedObject private var musicMirror = MusicAppMirror.shared
     @AppStorage("dev_bypass_replay_timegate") var bypassReplayTimegate: Bool = false
     @State private var section: Section = .appearance
     @State private var confirm: Confirmation?
@@ -633,6 +634,23 @@ struct PreferencesView: View {
         settingsGroup(theme, title: "How scrobbling works") {
             caption("Mesh Player tells Last.fm what's playing as each song starts, and scrobbles it after half the song or 4 minutes (songs shorter than 30 seconds are skipped). Scrobbles made offline are saved and sent later, up to two weeks after the play.", theme)
         }
+        settingsGroup(theme, title: "Through the Music App") {
+            Toggle("Play along silently in the Music app", isOn: $musicMirror.isEnabled)
+            switch musicMirror.status {
+            case .mirroring(let title):
+                Label("Mirroring “\(title)” in Music", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 12)).foregroundStyle(.green)
+            case .notInMusic(let title):
+                Label("“\(title)” isn't in your Music library, so it can't be mirrored", systemImage: "questionmark.circle")
+                    .font(.system(size: 12)).foregroundStyle(theme.textSecondary)
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12)).foregroundStyle(.orange)
+            default:
+                EmptyView()
+            }
+            caption("Another way to scrobble: while Mesh Player plays a song, the Music app plays the same song from your Music library in step with it — pausing, seeking and skipping along — with Music's volume at zero. Music then counts the play itself, so Apple Music Replay, Music's play counts and any scrobbler that watches the Music app pick it up. Music's volume is restored when you turn this off or quit. Songs that aren't in your Music library are skipped.", theme)
+        }
     }
 
     private func caption(_ text: String, _ theme: ThemeColor) -> some View {
@@ -844,7 +862,12 @@ struct macOSMusicPlayerApp: App {
                     }
                     engine.onTrackStarted = { track in
                         LastFMService.shared.nowPlaying(track)
+                        MusicAppMirror.shared.trackStarted(track)
                     }
+                    engine.onSeek = { time in
+                        MusicAppMirror.shared.seeked(to: time)
+                    }
+                    MusicAppMirror.shared.attach(to: engine)
                     engine.onScrobblePoint = { track, startedAt in
                         LastFMService.shared.scrobble(track, startedAt: startedAt)
                     }
