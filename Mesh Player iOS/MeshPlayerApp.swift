@@ -53,14 +53,17 @@ struct RootView: View {
     @State private var tab: AppTab = .home
     @State private var showNowPlaying = false
     @State private var dismissedNetworkAlert = false
+    @AppStorage("themeOverride") private var themeOverride = MeshTheme.followMac
+    @State private var libraryPath = NavigationPath()
 
     var body: some View {
+        let theme = MeshTheme.current(override: themeOverride, library: library)
         TabView(selection: $tab) {
             Tab("Home", systemImage: "house.fill", value: AppTab.home) {
                 NavigationStack { HomeView() }
             }
             Tab("Library", systemImage: "square.stack.fill", value: AppTab.library) {
-                NavigationStack { LibraryHomeView() }
+                NavigationStack(path: $libraryPath) { LibraryHomeView() }
             }
             Tab(value: AppTab.search, role: .search) {
                 NavigationStack { SearchView() }
@@ -85,6 +88,9 @@ struct RootView: View {
         .overlay(alignment: .top) {
             SyncBanner()
         }
+        .tint(theme.accent)
+        .preferredColorScheme(theme.isDark ? .dark : .light)
+        .environment(\.meshTheme, theme)
         .alert("Turn On Local Network", isPresented: Binding(get: { sync.localNetworkDenied && !dismissedNetworkAlert }, set: { if !$0 { dismissedNetworkAlert = true } })) {
             Button("Open Settings") { sync.openAppSettings() }
             Button("Not Now", role: .cancel) {}
