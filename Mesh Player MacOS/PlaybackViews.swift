@@ -524,6 +524,9 @@ struct FullLyricsView: View {
     @State private var newPlaylistName = ""
     @State private var cachedColors: [Color] = []
     @State private var hoveringArt = false
+    @State private var appeared = false
+    @State private var backCount = 0
+    @State private var forwardCount = 0
 
     @AppStorage("enableDynamicBackground") private var enableDynamicBackground = true
 
@@ -643,18 +646,22 @@ struct FullLyricsView: View {
                                 EmptyView()
                             }
                         }
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        .transition(.opacity.combined(with: .offset(x: 80)).combined(with: .scale(scale: 0.97, anchor: .trailing)))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .padding(.horizontal, 56)
                 .padding(.bottom, 28)
-                .animation(.easeInOut(duration: 0.3), value: effectiveRightPanel)
+                .animation(.spring(response: 0.5, dampingFraction: 0.86), value: effectiveRightPanel)
             }
         }
         .environment(\.colorScheme, .dark)
-        .onAppear { updateCachedColors() }
+        .onAppear {
+            updateCachedColors()
+            // The artwork grows in first and the controls rise just after, like Apple Music.
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.82).delay(0.08)) { appeared = true }
+        }
         .onChange(of: engine.currentTrack?.id) { _, _ in updateCachedColors() }
         .alert("New Playlist", isPresented: $showNewPlaylistAlert) {
             TextField("Playlist Name", text: $newPlaylistName)
@@ -732,10 +739,10 @@ struct FullLyricsView: View {
 
     private func playerColumn(_ theme: ThemeColor, art: CGFloat) -> some View {
         let glass = ThemeCatalog.theme(named: "True Black")
-        // Controls scale with the artwork, within limits that keep them legible and tappable.
+        // Controls scale with the artwork, within limits that keep them legible and clickable.
         let scale = min(max(art / 400, 0.8), 1.3)
-        let rowWidth = max(art, 300)
-        return VStack(spacing: 28 * min(scale, 1)) {
+        let rowWidth = max(art, 300) + 40
+        return VStack(spacing: 26 * min(scale, 1)) {
             Button {
                 if let track = engine.currentTrack {
                     state.showAlbum(of: track)
@@ -744,131 +751,380 @@ struct FullLyricsView: View {
             } label: {
                 ZStack {
                     if let track = engine.currentTrack {
-                        ArtworkView(track: track, pixelSize: 900, cornerRadius: 20)
-                        if state.animatedArtworkEnabled {
-                            AnimatedArtworkView(track: track, cornerRadius: 20)
-                                .allowsHitTesting(false)
+                        // A new song's cover fades and settles in, like Apple Music.
+                        ZStack {
+                            ArtworkView(track: track, pixelSize: 900, cornerRadius: 20)
+                            if state.animatedArtworkEnabled {
+                                AnimatedArtworkView(track: track, cornerRadius: 20)
+                                    .allowsHitTesting(false)
+                            }
                         }
+                        .id(track.id)
+                        .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.94)), removal: .opacity))
                     } else {
                         RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.08))
                     }
                 }
                 .frame(width: art, height: art)
+                .animation(.spring(response: 0.55, dampingFraction: 0.85), value: engine.currentTrack?.id)
             }
             .buttonStyle(.plain)
-            .scaleEffect(engine.isPlaying ? (hoveringArt ? 1.015 : 1.0) : 0.88)
+            .scaleEffect(engine.isPlaying ? (hoveringArt ? 1.015 : 1.0) : 0.86)
             .shadow(color: .black.opacity(engine.isPlaying ? 0.5 : 0.25), radius: engine.isPlaying ? 40 : 16, y: engine.isPlaying ? 22 : 6)
-            .animation(.spring(response: 0.5, dampingFraction: 0.78), value: engine.isPlaying)
+            .animation(.spring(response: 0.55, dampingFraction: 0.68), value: engine.isPlaying)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hoveringArt)
             .onHover { hoveringArt = $0 }
+            .scaleEffect(appeared ? 1 : 0.9)
+            .opacity(appeared ? 1 : 0)
 
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(engine.currentTrack?.title ?? "Not Playing")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    if let track = engine.currentTrack {
-                        LinkText(text: "\(track.artist) — \(track.album)", font: .system(size: 14, weight: .medium), color: .white.opacity(0.62), hoverColor: .white) {
-                            state.showArtist(track.artist)
-                            isPresented = false
+            VStack(spacing: 22 * min(scale, 1)) {
+                HStack(alignment: .center, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        MarqueeText(text: engine.currentTrack?.title ?? "Not Playing", font: .system(size: 22 * min(scale, 1.15), weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.92))
+                        if let track = engine.currentTrack {
+                            LinkText(text: "\(track.artist) — \(track.album)", font: .system(size: 17 * min(scale, 1.1)), color: .white.opacity(0.55), hoverColor: .white.opacity(0.85)) {
+                                state.showArtist(track.artist)
+                                isPresented = false
+                            }
                         }
                     }
-                }
-                Spacer()
-                if let track = engine.currentTrack {
-                    let isFav = state.isFavorite(track.id)
-                    Button {
-                        state.toggleFavorite(track: track)
-                    } label: {
-                        Image(systemName: isFav ? "heart.fill" : "heart").font(.system(size: 15, weight: .semibold))
-                    }
-                    .buttonStyle(IconButtonStyle(theme: glass, isActive: isFav, size: 36, activeColor: .white))
+                    .id(engine.currentTrack?.id)
+                    .transition(.opacity)
+                    Spacer(minLength: 8)
+                    if let track = engine.currentTrack {
+                        let isFav = state.isFavorite(track.id)
+                        Button {
+                            state.toggleFavorite(track: track)
+                        } label: {
+                            Image(systemName: isFav ? "star.fill" : "star")
+                                .contentTransition(.symbolEffect(.replace))
+                        }
+                        .buttonStyle(GlassCircleButtonStyle(size: 38 * min(scale, 1.1)))
+                        .help(isFav ? "Undo Favorite" : "Favorite")
 
-                    Menu {
-                        Menu("Add to Playlist") {
-                            Button("New Playlist…") {
-                                newPlaylistName = ""
-                                showNewPlaylistAlert = true
+                        Menu {
+                            Menu("Add to Playlist") {
+                                Button("New Playlist…") {
+                                    newPlaylistName = ""
+                                    showNewPlaylistAlert = true
+                                }
+                                Divider()
+                                ForEach(state.playlists) { playlist in
+                                    Button(playlist.name) { state.addTrackToPlaylist(track: track, playlistId: playlist.id) }
+                                }
+                            }
+                            Button("Go to Album") {
+                                state.showAlbum(of: track)
+                                isPresented = false
+                            }
+                            Button("Go to Artist") {
+                                state.showArtist(track.artist)
+                                isPresented = false
                             }
                             Divider()
-                            ForEach(state.playlists) { playlist in
-                                Button(playlist.name) { state.addTrackToPlaylist(track: track, playlistId: playlist.id) }
+                            Button("Show in Finder") {
+                                if let url = track.fileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                            }
+                        } label: {
+                            GlassCircle(size: 38 * min(scale, 1.1)) {
+                                Image(systemName: "ellipsis").font(.system(size: 16, weight: .bold))
                             }
                         }
-                        Button("Show in Finder") {
-                            if let url = track.fileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.8))
-                            .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(0.1), in: Circle())
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
                 }
-            }
-            .frame(width: rowWidth + 20)
+                .animation(.easeInOut(duration: 0.35), value: engine.currentTrack?.id)
 
-            VStack(spacing: 10) {
-                PlaybackScrubber(engine: engine, timeTracker: timeTracker, theme: theme, style: .fullscreen)
-                if let track = engine.currentTrack {
-                    AudioQualityTagsView(track: track, theme: glass)
-                }
-            }
-            .frame(width: rowWidth + 60)
+                FullscreenProgressBar(engine: engine, timeTracker: timeTracker)
 
-            HStack(spacing: 0) {
-                Button {
-                    state.toggleShuffle(currentTrack: engine.currentTrack)
-                } label: {
-                    Image(systemName: "shuffle").font(.system(size: 16 * scale, weight: .semibold))
-                }
-                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.isQueueShuffled, size: 40 * scale, activeColor: .white))
-                Spacer()
-                Button {
-                    state.playPrevious(engine: engine)
-                } label: {
-                    Image(systemName: "backward.fill").font(.system(size: 26 * scale))
-                }
-                .buttonStyle(IconButtonStyle(theme: glass, size: 52 * scale, activeColor: .white))
-                Spacer()
-                Button {
-                    engine.togglePlayPause()
-                } label: {
-                    Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 26 * scale, weight: .bold))
-                        .foregroundStyle(.black)
-                        .offset(x: engine.isPlaying ? 0 : 2)
-                        .frame(width: 64 * scale, height: 64 * scale)
-                        .background(.white, in: Circle())
-                }
-                .buttonStyle(PressableStyle())
+                HStack(spacing: 0) {
+                    Button {
+                        state.toggleShuffle(currentTrack: engine.currentTrack)
+                    } label: {
+                        Image(systemName: "shuffle").font(.system(size: 18 * scale, weight: .semibold))
+                    }
+                    .buttonStyle(ToggleCircleButtonStyle(isOn: state.isQueueShuffled, size: 46 * scale))
+                    .help("Shuffle")
                     Spacer()
-                Button {
-                    state.playNext(engine: engine)
-                } label: {
-                    Image(systemName: "forward.fill").font(.system(size: 26 * scale))
+                    Button {
+                        backCount += 1
+                        state.playPrevious(engine: engine)
+                    } label: {
+                        Image(systemName: "backward.fill")
+                            .font(.system(size: 34 * scale))
+                            .symbolEffect(.bounce.down, value: backCount)
+                    }
+                    .buttonStyle(TransportButtonStyle(size: 62 * scale))
+                    Spacer()
+                    Button {
+                        engine.togglePlayPause()
+                    } label: {
+                        Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 46 * scale))
+                            .contentTransition(.symbolEffect(.replace.downUp))
+                    }
+                    .buttonStyle(TransportButtonStyle(size: 72 * scale))
+                    Spacer()
+                    Button {
+                        forwardCount += 1
+                        state.playNext(engine: engine)
+                    } label: {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 34 * scale))
+                            .symbolEffect(.bounce.down, value: forwardCount)
+                    }
+                    .buttonStyle(TransportButtonStyle(size: 62 * scale))
+                    Spacer()
+                    Button {
+                        state.repeatMode = (state.repeatMode + 1) % 3
+                    } label: {
+                        Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat")
+                            .font(.system(size: 18 * scale, weight: .semibold))
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .buttonStyle(ToggleCircleButtonStyle(isOn: state.repeatMode > 0, size: 46 * scale))
+                    .help("Repeat")
                 }
-                .buttonStyle(IconButtonStyle(theme: glass, size: 52 * scale, activeColor: .white))
-                Spacer()
-                Button {
-                    state.repeatMode = (state.repeatMode + 1) % 3
-                } label: {
-                    Image(systemName: state.repeatMode == 2 ? "repeat.1" : "repeat").font(.system(size: 16 * scale, weight: .semibold))
+                .padding(.horizontal, 2)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "speaker.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                    ThinSlider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), theme: glass)
+                    Image(systemName: "speaker.wave.3.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
                 }
-                .buttonStyle(IconButtonStyle(theme: glass, isActive: state.repeatMode > 0, size: 40 * scale, activeColor: .white))
+                .frame(height: 16)
+                .padding(.horizontal, 2)
             }
             .frame(width: rowWidth)
+            .offset(y: appeared ? 0 : 30)
+            .opacity(appeared ? 1 : 0)
+        }
+    }
+}
 
-            HStack(spacing: 8) {
-                Image(systemName: "speaker.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-                ThinSlider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), theme: glass)
-                    .frame(width: max(160, rowWidth * 0.55), height: 16)
-                Image(systemName: "speaker.wave.3.fill").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+// MARK: - Full screen player pieces (styled after Apple Music on the Mac)
+
+/// One line of text that scrolls sideways when it doesn't fit, pausing at the start of each pass.
+struct MarqueeText: View {
+    let text: String
+    let font: Font
+    var gap: CGFloat = 48
+    /// Points per second.
+    var speed: CGFloat = 32
+
+    @State private var textWidth: CGFloat = 0
+    @State private var boxWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    private var overflows: Bool { textWidth > boxWidth + 1 }
+
+    var body: some View {
+        Text(text)
+            .font(font)
+            .lineLimit(1)
+            .hidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
+                HStack(spacing: gap) {
+                    label
+                    if overflows { label }
+                }
+                .offset(x: offset)
+            }
+            .clipped()
+            .mask {
+                if overflows {
+                    LinearGradient(stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .black, location: 0.04),
+                        .init(color: .black, location: 0.92),
+                        .init(color: .clear, location: 1)
+                    ], startPoint: .leading, endPoint: .trailing)
+                } else {
+                    Rectangle()
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boxWidth = $0 }
+            .task(id: "\(text)|\(overflows)") { await scroll() }
+    }
+
+    private var label: some View {
+        Text(text)
+            .font(font)
+            .lineLimit(1)
+            .fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
+    }
+
+    private func scroll() async {
+        offset = 0
+        guard overflows else { return }
+        let distance = textWidth + gap
+        let duration = Double(distance / speed)
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(2.5))
+            if Task.isCancelled { return }
+            withAnimation(.linear(duration: duration)) { offset = -distance }
+            try? await Task.sleep(for: .seconds(duration))
+            if Task.isCancelled { return }
+            var reset = Transaction()
+            reset.disablesAnimations = true
+            withTransaction(reset) { offset = 0 }
+        }
+    }
+}
+
+/// Translucent circle used behind the full screen player's star and ••• buttons.
+struct GlassCircle<Content: View>: View {
+    let size: CGFloat
+    var highlighted = false
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .foregroundStyle(.white.opacity(0.9))
+            .frame(width: size, height: size)
+            .background(Circle().fill(Color.white.opacity(highlighted ? 0.24 : 0.14)))
+            .contentShape(Circle())
+    }
+}
+
+struct GlassCircleButtonStyle: ButtonStyle {
+    let size: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        StyleBody(configuration: configuration, size: size)
+    }
+
+    private struct StyleBody: View {
+        let configuration: Configuration
+        let size: CGFloat
+        @State private var hovering = false
+
+        var body: some View {
+            GlassCircle(size: size, highlighted: hovering) {
+                configuration.label.font(.system(size: size * 0.42, weight: .semibold))
+            }
+            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.15), value: hovering)
+            .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// Shuffle / repeat: a filled circle marks them as on.
+struct ToggleCircleButtonStyle: ButtonStyle {
+    let isOn: Bool
+    let size: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        StyleBody(configuration: configuration, isOn: isOn, size: size)
+    }
+
+    private struct StyleBody: View {
+        let configuration: Configuration
+        let isOn: Bool
+        let size: CGFloat
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(.white.opacity(isOn ? 0.95 : (hovering ? 0.85 : 0.6)))
+                .frame(width: size, height: size)
+                .background(Circle().fill(Color.white.opacity(isOn ? 0.2 : (hovering ? 0.08 : 0))))
+                .contentShape(Circle())
+                .scaleEffect(configuration.isPressed ? 0.88 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.65), value: isOn)
+                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+                .animation(.easeOut(duration: 0.15), value: hovering)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// Back / play-pause / forward: bare glyphs that dip when pressed, with a soft halo on hover.
+struct TransportButtonStyle: ButtonStyle {
+    let size: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        StyleBody(configuration: configuration, size: size)
+    }
+
+    private struct StyleBody: View {
+        let configuration: Configuration
+        let size: CGFloat
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(.white.opacity(hovering ? 1 : 0.9))
+                .frame(width: size, height: size)
+                .background(Circle().fill(Color.white.opacity(configuration.isPressed ? 0.14 : (hovering ? 0.07 : 0))))
+                .contentShape(Circle())
+                .scaleEffect(configuration.isPressed ? 0.86 : 1)
+                .animation(.spring(response: 0.28, dampingFraction: 0.55), value: configuration.isPressed)
+                .animation(.easeOut(duration: 0.15), value: hovering)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// Thick timeline with the elapsed and remaining times underneath and the audio quality in between.
+struct FullscreenProgressBar: View {
+    @ObservedObject var engine: AudioEngineManager
+    @ObservedObject var timeTracker: AudioTimeTracker
+
+    @State private var dragFraction: Double?
+    @State private var hovering = false
+
+    var body: some View {
+        let duration = max(0.1, engine.duration)
+        let fraction = dragFraction ?? min(max(timeTracker.currentTime / duration, 0), 1)
+        let shownTime = dragFraction.map { $0 * duration } ?? timeTracker.currentTime
+        let active = hovering || dragFraction != nil
+
+        VStack(spacing: 8) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(active ? 0.26 : 0.2))
+                    Capsule().fill(Color.white.opacity(active ? 0.9 : 0.62))
+                        .frame(width: max(0, geo.size.width * fraction))
+                }
+                .frame(height: active ? 11 : 8)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { g in dragFraction = min(max(g.location.x / max(geo.size.width, 1), 0), 1) }
+                        .onEnded { g in
+                            let f = min(max(g.location.x / max(geo.size.width, 1), 0), 1)
+                            engine.seek(to: f * engine.duration)
+                            dragFraction = nil
+                        }
+                )
+            }
+            .frame(height: 14)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: active)
+            .onHover { hovering = $0 }
+            .disabled(engine.currentTrack == nil)
+
+            ZStack {
+                HStack {
+                    Text(Fmt.time(shownTime))
+                    Spacer()
+                    Text("–" + Fmt.time(max(0, duration - shownTime)))
+                }
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(active ? 0.7 : 0.5))
+
+                if let track = engine.currentTrack {
+                    AudioQualityTagsView(track: track, theme: ThemeCatalog.theme(named: "True Black"))
+                }
             }
         }
     }

@@ -79,11 +79,12 @@ struct macOSMusicPlayerContentView: View {
 
             if state.showFullscreenPlayer {
                 FullLyricsView(state: state, engine: engine, timeTracker: engine.timeTracker, isPresented: $state.showFullscreenPlayer)
-                    .transition(.move(edge: .bottom))
+                    .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                            removal: .move(edge: .bottom).combined(with: .opacity)))
                     .zIndex(10)
             }
         }
-        .animation(.spring(response: 0.45, dampingFraction: 0.9), value: state.showFullscreenPlayer)
+        .animation(.spring(response: 0.5, dampingFraction: 0.88), value: state.showFullscreenPlayer)
         .preferredColorScheme(theme.colorScheme)
         .tint(theme.accent)
         .onChange(of: state.searchKeyword) { _, query in routeSearch(query) }
