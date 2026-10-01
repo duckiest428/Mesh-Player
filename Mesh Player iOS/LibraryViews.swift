@@ -212,7 +212,7 @@ struct SongsView: View {
     @EnvironmentObject var library: MobileLibrary
     @EnvironmentObject var player: MobilePlayer
     @State private var query = ""
-    @AppStorage("songSort") private var sort = "title"
+    @AppStorage("songSort") private var sort = "added"
 
     var body: some View {
         let base = songs ?? library.availableSongs
@@ -222,10 +222,13 @@ struct SongsView: View {
             Section {
                 PlayShuffleButtons(songs: list)
                     .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 16, trailing: 20))
             }
             ForEach(list) { song in
-                Button { player.play(list, startAt: song) } label: { SongRow(song: song) }
+                Button { player.play(list, startAt: song) } label: { SongRow(song: song, showsMenu: true) }
                     .buttonStyle(.plain)
+                    .listRowInsets(EdgeInsets(top: 7, leading: 20, bottom: 7, trailing: 14))
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in 68 }
                     .contextMenu { SongMenu(songs: [song]) }
                     .swipeActions(edge: .leading) {
                         Button { player.playNext([song]) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }.tint(.indigo)
@@ -240,14 +243,22 @@ struct SongsView: View {
         .navigationTitle(title)
         .searchable(text: $query, prompt: "Find in \(title)")
         .toolbar {
-            Menu {
-                Picker("Sort", selection: $sort) {
-                    Text("Title").tag("title")
-                    Text("Artist").tag("artist")
-                    Text("Recently Added").tag("added")
-                    Text("Most Played").tag("plays")
-                }
-            } label: { Image(systemName: "arrow.up.arrow.down") }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Menu {
+                    Picker("Sort By", selection: $sort) {
+                        Text("Title").tag("title")
+                        Text("Artist").tag("artist")
+                        Text("Recently Added").tag("added")
+                        Text("Most Played").tag("plays")
+                    }
+                } label: { Image(systemName: "line.3.horizontal.decrease") }
+                    .tint(.primary)
+                Menu {
+                    Button { player.playNext(list) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                    Button { player.playLater(list) } label: { Label("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") }
+                } label: { Image(systemName: "ellipsis") }
+                    .tint(.primary)
+            }
         }
     }
 

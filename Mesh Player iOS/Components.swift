@@ -161,15 +161,17 @@ struct SongRow: View {
     var showArtwork = true
     var number: Int? = nil
     var subtitle: String? = nil
+    /// Adds the ••• menu at the end of the row, like Apple Music's song lists.
+    var showsMenu = false
     @EnvironmentObject var player: MobilePlayer
 
     var body: some View {
         let isCurrent = player.current?.id == song.id
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             if let number {
                 Group {
                     if isCurrent {
-                        Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
+                        Image(systemName: "waveform")
                             .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
                             .foregroundStyle(.tint)
                     } else {
@@ -179,22 +181,23 @@ struct SongRow: View {
                 .font(.subheadline.monospacedDigit())
                 .frame(width: 24)
             } else if showArtwork {
-                ArtworkImage(key: song.artworkKey, size: 48, cornerRadius: 6, seed: song.album)
-                    .frame(width: 48, height: 48)
+                ArtworkImage(key: song.artworkKey, size: 54, cornerRadius: 6, seed: song.album)
+                    .frame(width: 54, height: 54)
                     .overlay {
                         if isCurrent {
-                            RoundedRectangle(cornerRadius: 6).fill(.black.opacity(0.35))
+                            RoundedRectangle(cornerRadius: 6).fill(.black.opacity(0.45))
                             Image(systemName: "waveform")
+                                .font(.title3.weight(.semibold))
                                 .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
                                 .foregroundStyle(.white)
                         }
                     }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
                     Text(song.title)
                         .font(.body)
-                        .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                     if song.info.isAtmos {
                         Image(systemName: "spatial.audio.fill").font(.caption2).foregroundStyle(.secondary)
@@ -208,6 +211,15 @@ struct SongRow: View {
             Spacer(minLength: 4)
             if song.isFavorite {
                 Image(systemName: "star.fill").font(.caption).foregroundStyle(.tint)
+            }
+            if showsMenu {
+                Menu { SongMenu(songs: [song]) } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .tint(.primary)
             }
         }
         .contentShape(Rectangle())
@@ -292,19 +304,24 @@ struct PlayShuffleButtons: View {
     @EnvironmentObject var player: MobilePlayer
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button { player.play(songs) } label: {
-                Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
-            }
-            Button { player.play(songs, shuffled: true) } label: {
-                Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
-            }
+        HStack(spacing: 16) {
+            button("Play", symbol: "play.fill") { player.play(songs) }
+            button("Shuffle", symbol: "shuffle") { player.play(songs, shuffled: true) }
         }
-        .font(.headline)
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-        .buttonBorderShape(.roundedRectangle(radius: 12))
         .disabled(songs.isEmpty)
+    }
+
+    /// Apple Music's gray capsule buttons with a white label.
+    private func button(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .background(.fill.tertiary, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
