@@ -200,6 +200,20 @@ class AudioEngineManager: ObservableObject {
         SystemMediaManager.shared.updateNowPlayingInfo(track: currentTrack, isPlaying: isPlaying, currentTime: currentTime, refreshArtwork: refreshArtwork)
     }
     
+    /// Parses the current song's lyrics, then swaps in word-synced ones when that experimental
+    /// setting is on and they can be found. Also called when the setting changes.
+    func reloadLyrics() {
+        guard let track = currentTrack else { parsedLyrics = []; return }
+        parsedLyrics = LyricsEngine.parse(lyricsText: track.lyrics, duration: track.duration)
+        guard UserDefaults.standard.bool(forKey: ExperimentalSettings.wordLyricsKey) else { return }
+        let id = track.id
+        Task { @MainActor [weak self] in
+            guard let lines = await WordLyricsService.shared.lines(title: track.title, artist: track.artist, duration: track.duration, fileLyrics: track.lyrics),
+                  let self, self.currentTrack?.id == id else { return }
+            self.parsedLyrics = lines
+        }
+    }
+
     /// Albums we've already asked the iTunes Search API about this session.
     private var remoteLookupsAttempted = Set<String>()
 
@@ -218,16 +232,7 @@ class AudioEngineManager: ObservableObject {
         self.hasScrobbled = false
         self.playStartedAt = Date()
         self.isAtmosTrack = track.isAtmos
-        self.parsedLyrics = LyricsEngine.parse(lyricsText: track.lyrics, duration: track.duration)
-        if UserDefaults.standard.bool(forKey: ExperimentalSettings.wordLyricsKey) {
-            // Experimental: swap in word-synced lyrics when they can be found.
-            let id = track.id
-            Task { @MainActor [weak self] in
-                guard let lines = await WordLyricsService.shared.lines(title: track.title, artist: track.artist, duration: track.duration),
-                      let self, self.currentTrack?.id == id else { return }
-                self.parsedLyrics = lines
-            }
-        }
+        reloadLyrics()
 
         guard let url = track.fileURL else {
             self.player = nil

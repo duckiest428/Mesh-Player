@@ -95,6 +95,11 @@ nonisolated enum LyricsEngine {
         return withBreaks(lines)
     }
 
+    /// Whether lyrics text has LRC timestamps, rather than being plain text.
+    static func isTimed(_ lyricsText: String) -> Bool {
+        lyricsText.range(of: "\\[\\d+:\\d+", options: .regularExpression) != nil
+    }
+
     /// Sorts timed lines and adds the instrumental-break lines. Lines that already know when
     /// they end (word-synced ones) keep that end time.
     static func withBreaks(_ lines: [SyncedLyricLine]) -> [SyncedLyricLine] {
