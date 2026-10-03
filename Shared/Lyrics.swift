@@ -7,6 +7,13 @@
 
 import Foundation
 
+/// One word of a word-synced lyric line.
+nonisolated struct TimedWord: Hashable, Sendable {
+    let text: String
+    let start: TimeInterval
+    let end: TimeInterval
+}
+
 nonisolated struct SyncedLyricLine: Identifiable, Equatable, Hashable {
     let id: UUID
     let timestamp: TimeInterval
@@ -15,8 +22,11 @@ nonisolated struct SyncedLyricLine: Identifiable, Equatable, Hashable {
     var breakStart: TimeInterval
     var breakEnd: TimeInterval
     var endTime: TimeInterval
+    /// Per-word timing, when the lyrics are word-synced.
+    var words: [TimedWord]? = nil
 
-    init(id: UUID = UUID(), timestamp: TimeInterval, text: String, isBreak: Bool = false, breakStart: TimeInterval = 0.0, breakEnd: TimeInterval = 0.0, endTime: TimeInterval = 0.0) {
+    init(id: UUID = UUID(), timestamp: TimeInterval, text: String, isBreak: Bool = false, breakStart: TimeInterval = 0.0, breakEnd: TimeInterval = 0.0, endTime: TimeInterval = 0.0, words: [TimedWord]? = nil) {
+        self.words = words
         self.id = id
         self.timestamp = timestamp
         self.text = text
@@ -82,11 +92,17 @@ nonisolated enum LyricsEngine {
             }
         }
         
+        return withBreaks(lines)
+    }
+
+    /// Sorts timed lines and adds the instrumental-break lines. Lines that already know when
+    /// they end (word-synced ones) keep that end time.
+    static func withBreaks(_ lines: [SyncedLyricLine]) -> [SyncedLyricLine] {
         var sortedLines = lines.sorted(by: { $0.timestamp < $1.timestamp })
         if sortedLines.isEmpty { return [] }
         
         // 1. Calculate an Artificial End Time for a Lyric Line
-        for i in 0..<sortedLines.count {
+        for i in 0..<sortedLines.count where sortedLines[i].endTime <= sortedLines[i].timestamp {
             let wordCount = Double(sortedLines[i].text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.count)
             let calculatedDuration = min(6.0, max(2.5, wordCount / 3.0))
             let nextLineStart = (i < sortedLines.count - 1) ? sortedLines[i+1].timestamp : sortedLines[i].timestamp + calculatedDuration

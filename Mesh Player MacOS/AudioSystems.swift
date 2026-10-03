@@ -219,6 +219,15 @@ class AudioEngineManager: ObservableObject {
         self.playStartedAt = Date()
         self.isAtmosTrack = track.isAtmos
         self.parsedLyrics = LyricsEngine.parse(lyricsText: track.lyrics, duration: track.duration)
+        if UserDefaults.standard.bool(forKey: ExperimentalSettings.wordLyricsKey) {
+            // Experimental: swap in word-synced lyrics when they can be found.
+            let id = track.id
+            Task { @MainActor [weak self] in
+                guard let lines = await WordLyricsService.shared.lines(title: track.title, artist: track.artist, duration: track.duration),
+                      let self, self.currentTrack?.id == id else { return }
+                self.parsedLyrics = lines
+            }
+        }
 
         guard let url = track.fileURL else {
             self.player = nil

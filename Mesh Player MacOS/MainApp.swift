@@ -346,6 +346,15 @@ struct PreferencesView: View {
     @ObservedObject private var musicMirror = MusicAppMirror.shared
     @AppStorage("dev_bypass_replay_timegate") var bypassReplayTimegate: Bool = false
     @State private var section: Section = .appearance
+    @AppStorage(ExperimentalSettings.wordLyricsKey) private var wordLyrics = false
+    @AppStorage(ExperimentalSettings.translateLyricsKey) private var translateLyrics = false
+
+    private var translationCaption: String {
+        if #available(macOS 15.0, *) {
+            return "Shows a translation into your language under each line of lyrics in another language, using Apple's on-device translation."
+        }
+        return "Needs macOS 15 or later."
+    }
     @State private var confirm: Confirmation?
     @State private var notice: String?
 
@@ -532,6 +541,12 @@ struct PreferencesView: View {
             }
             settingsGroup(theme, title: "Play Counts") {
                 caption("A play is counted once you've heard half of a song. Last.fm scrobbles after half the song or 4 minutes, whichever comes first.", theme)
+            }
+            settingsGroup(theme, title: "Experimental") {
+                Toggle("Word-by-word lyrics", isOn: $wordLyrics)
+                caption("Looks up lyrics timed to each word (from NetEase Cloud Music) and lights the words up as they're sung. Takes effect from the next song.", theme)
+                Toggle("Translate lyrics", isOn: $translateLyrics)
+                caption(translationCaption, theme)
             }
         case .library:
             let stats = state.libraryStats

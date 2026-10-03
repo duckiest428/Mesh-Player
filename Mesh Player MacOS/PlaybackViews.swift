@@ -219,7 +219,7 @@ struct PlayerControlsView: View {
 
     private func utilities(_ theme: ThemeColor) -> some View {
         HStack(spacing: 4) {
-            let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
+            let hasLyrics = !engine.parsedLyrics.isEmpty
             panelButton(.lyrics, icon: "quote.bubble", help: hasLyrics ? "Lyrics" : "No Lyrics Available", theme: theme)
                 .disabled(!hasLyrics && state.activeRightSidebar != .lyrics)
             panelButton(.queue, icon: "list.bullet", help: "Playing Next", theme: theme)
@@ -681,7 +681,7 @@ struct FullLyricsView: View {
 
     private func topBar(_ effectiveRightPanel: FullLyricsRightPanel) -> some View {
         let glass = ThemeCatalog.theme(named: "True Black")
-        let hasLyrics = !(engine.currentTrack?.lyrics.isEmpty ?? true)
+        let hasLyrics = !engine.parsedLyrics.isEmpty
         return HStack(spacing: 6) {
             Button {
                 isPresented = false
@@ -1142,6 +1142,8 @@ struct FullLyricsList: View {
     @ObservedObject var engine: AudioEngineManager
     @ObservedObject var timeTracker: AudioTimeTracker
     @State private var activeLineId: UUID?
+    @State private var translations: [UUID: String] = [:]
+    @AppStorage(ExperimentalSettings.translateLyricsKey) private var translateLyrics = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1151,6 +1153,7 @@ struct FullLyricsList: View {
                         LyricLineView(
                             line: line,
                             isActive: activeLineId == line.id,
+                            translation: translations[line.id],
                             engine: engine,
                             onSeek: { engine.seek(to: $0) }
                         )
@@ -1169,6 +1172,7 @@ struct FullLyricsList: View {
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             )
+            .lyricsTranslation(engine.parsedLyrics, enabled: translateLyrics, into: $translations)
             .onChange(of: timeTracker.currentTime) { _, newValue in
                 guard let current = engine.parsedLyrics.last(where: { $0.timestamp <= newValue }),
                       current.id != activeLineId else { return }
@@ -1185,13 +1189,25 @@ struct FullLyricsList: View {
 struct LyricLineView: View, Equatable {
     let line: SyncedLyricLine
     let isActive: Bool
-    /// Break dots animate themselves from the engine; lyric lines never redraw for time.
+    /// Experimental: the line in your language, shown under it.
+    var translation: String? = nil
+    /// Break dots and word-synced lines animate themselves from the engine; other lines never
+    /// redraw for time.
     let engine: AudioEngineManager
     let onSeek: (TimeInterval) -> Void
     @State private var isHovered = false
 
     static func == (lhs: LyricLineView, rhs: LyricLineView) -> Bool {
-        lhs.line.id == rhs.line.id && lhs.isActive == rhs.isActive
+        lhs.line.id == rhs.line.id && lhs.isActive == rhs.isActive && lhs.translation == rhs.translation
+    }
+
+    /// Each word brightens as it's sung, softly fading in across its length.
+    private func wordText(_ words: [TimedWord], at time: TimeInterval) -> Text {
+        words.reduce(Text("")) { text, word in
+            let length = max(0.08, word.end - word.start)
+            let progress = min(max((time - word.start) / length, 0), 1)
+            return text + Text(word.text).foregroundColor(.white.opacity(0.32 + 0.68 * progress))
+        }
     }
 
     private static let adlibRegex = try? NSRegularExpression(pattern: "(\\(.*?\\)|\\[.*?\\])", options: [])
@@ -1221,13 +1237,30 @@ struct LyricLineView: View, Equatable {
             } else {
                 let parsed = parseAdlibs(from: line.text)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(parsed.0)
-                        .font(.system(size: 30, weight: .bold))
-                        .foregroundColor(isActive ? .white : .white.opacity(0.28))
-                    if let adlib = parsed.1 {
-                        Text(adlib)
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundColor(isActive ? .white.opacity(0.55) : .white.opacity(0.14))
+                    if let words = line.words, isActive {
+                        TimelineView(.animation(minimumInterval: nil, paused: !engine.isPlaying)) { _ in
+                            wordText(words, at: engine.preciseCurrentTime)
+                                .font(.system(size: 30, weight: .bold))
+                        }
+                    } else if line.words != nil {
+                        Text(line.text)
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundColor(.white.opacity(0.28))
+                    } else {
+                        Text(parsed.0)
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundColor(isActive ? .white : .white.opacity(0.28))
+                        if let adlib = parsed.1 {
+                            Text(adlib)
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundColor(isActive ? .white.opacity(0.55) : .white.opacity(0.14))
+                        }
+                    }
+                    if let translation {
+                        Text(translation)
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundColor(isActive ? .white.opacity(0.6) : .white.opacity(0.18))
+                            .padding(.top, 2)
                     }
                 }
                 .blur(radius: isActive ? 0 : 0.6)
