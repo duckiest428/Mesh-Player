@@ -1668,34 +1668,43 @@ struct InstrumentalBreakDots: View {
     @ObservedObject var engine: AudioEngineManager
     let breakStart: TimeInterval
     let breakEnd: TimeInterval
-    var dotSize: CGFloat = 12
+    var dotSize: CGFloat = 17
 
     var body: some View {
+        // Apple Music's interlude dots: they grow in, breathe slowly while each dot fills with
+        // light in turn across the break, then swell and pop away just as the next line starts.
         TimelineView(.animation(minimumInterval: nil, paused: !engine.isPlaying)) { context in
             let time = engine.preciseCurrentTime
-            let duration = max(0.1, breakEnd - breakStart)
+            // Breaks end a second before the next line (see LyricsEngine); the dots last until it.
+            let end = breakEnd + 1
+            let duration = max(0.1, end - breakStart)
             let fraction = min(max(0, (time - breakStart) / duration), 1)
-            let remaining = breakEnd - time
-            // Fades out and shrinks away just before the next line, then the line takes over.
-            let ending = remaining <= 0.6 ? min(max(0, remaining / 0.6), 1) : 1
-            let breath = 1 + 0.06 * sin(context.date.timeIntervalSinceReferenceDate * 2 * .pi / 2.4)
+            let appear = Self.easeOut(min(max(0, (time - breakStart) / 0.5), 1))
+            let remaining = end - time
+            let popLength = 0.9
+            let pop = remaining < popLength ? 1 - max(0, remaining) / popLength : 0
+            // The swell up, then the quick shrink away.
+            let popScale = pop < 0.55 ? 1 + 0.28 * Self.easeOut(pop / 0.55) : 1.28 * (1 - Self.easeIn((pop - 0.55) / 0.45))
+            let breath = 1 + 0.09 * sin(context.date.timeIntervalSinceReferenceDate * 2 * .pi / 2.6)
 
-            HStack(spacing: dotSize * 0.9) {
+            HStack(spacing: dotSize * 0.85) {
                 ForEach(0..<3, id: \.self) { index in
-                    let start = Double(index) / 3
-                    let fill = min(max((fraction - start) * 3, 0), 1)
+                    let fill = Self.smooth(min(max((fraction - Double(index) / 3) * 3, 0), 1))
                     Circle()
-                        .fill(Color.white)
+                        .fill(Color.white.opacity(0.3 + 0.7 * fill))
                         .frame(width: dotSize, height: dotSize)
-                        .opacity(0.25 + 0.75 * fill)
-                        .scaleEffect(0.85 + 0.15 * fill)
+                        .shadow(color: .white.opacity(0.45 * fill), radius: dotSize * 0.3 * fill)
                 }
             }
-            .scaleEffect(breath * (0.7 + 0.3 * ending), anchor: .leading)
-            .opacity(ending)
+            .scaleEffect((0.6 + 0.4 * appear) * breath * popScale, anchor: .leading)
+            .opacity(appear * (pop < 0.55 ? 1 : 1 - Self.easeIn((pop - 0.55) / 0.45)))
             .padding(.vertical, 14)
         }
     }
+
+    private static func easeOut(_ x: Double) -> Double { 1 - pow(1 - x, 3) }
+    private static func easeIn(_ x: Double) -> Double { x * x * x }
+    private static func smooth(_ x: Double) -> Double { x * x * (3 - 2 * x) }
 }
 
 struct DolbyAtmosBadge: View {

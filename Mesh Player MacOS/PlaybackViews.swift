@@ -1203,10 +1203,12 @@ struct FullLyricsList: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 30) {
-                    ForEach(engine.parsedLyrics) { line in
+                    let activeIndex = engine.parsedLyrics.firstIndex { $0.id == activeLineId } ?? 0
+                    ForEach(Array(engine.parsedLyrics.enumerated()), id: \.element.id) { index, line in
                         LyricLineView(
                             line: line,
                             isActive: activeLineId == line.id,
+                            distance: abs(index - activeIndex),
                             translation: translations[line.id],
                             engine: engine,
                             onSeek: { engine.seek(to: $0) }
@@ -1242,6 +1244,8 @@ struct FullLyricsList: View {
 struct LyricLineView: View, Equatable {
     let line: SyncedLyricLine
     let isActive: Bool
+    /// Lines further from the one being sung are softer, like Apple Music.
+    var distance: Int = 0
     /// Experimental: the line in your language, shown under it.
     var translation: String? = nil
     /// Break dots and word-synced lines animate themselves from the engine; other lines never
@@ -1251,16 +1255,7 @@ struct LyricLineView: View, Equatable {
     @State private var isHovered = false
 
     static func == (lhs: LyricLineView, rhs: LyricLineView) -> Bool {
-        lhs.line.id == rhs.line.id && lhs.isActive == rhs.isActive && lhs.translation == rhs.translation
-    }
-
-    /// Each word brightens as it's sung, softly fading in across its length.
-    private func wordText(_ words: [TimedWord], at time: TimeInterval) -> Text {
-        words.reduce(Text("")) { text, word in
-            let length = max(0.08, word.end - word.start)
-            let progress = min(max((time - word.start) / length, 0), 1)
-            return text + Text(word.text).foregroundColor(.white.opacity(0.32 + 0.68 * progress))
-        }
+        lhs.line.id == rhs.line.id && lhs.isActive == rhs.isActive && lhs.distance == rhs.distance && lhs.translation == rhs.translation
     }
 
     private static let adlibRegex = try? NSRegularExpression(pattern: "(\\(.*?\\)|\\[.*?\\])", options: [])
@@ -1291,10 +1286,7 @@ struct LyricLineView: View, Equatable {
                 let parsed = parseAdlibs(from: line.text)
                 VStack(alignment: .leading, spacing: 4) {
                     if let words = line.words, isActive {
-                        TimelineView(.animation(minimumInterval: nil, paused: !engine.isPlaying)) { _ in
-                            wordText(words, at: engine.preciseCurrentTime)
-                                .font(.system(size: 30, weight: .bold))
-                        }
+                        SungLineView(words: words, engine: engine, fontSize: 30)
                     } else if line.words != nil {
                         Text(line.text)
                             .font(.system(size: 30, weight: .bold))
@@ -1316,7 +1308,7 @@ struct LyricLineView: View, Equatable {
                             .padding(.top, 2)
                     }
                 }
-                .blur(radius: isActive ? 0 : 0.6)
+                .blur(radius: isActive || isHovered ? 0 : min(CGFloat(distance), 5) * 0.45 + 0.3)
                 .scaleEffect(isActive ? 1.03 : 1.0, anchor: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1370,5 +1362,106 @@ struct WindowFullScreenReader: NSViewRepresentable {
         }
 
         deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    }
+}
+
+// MARK: - Word-synced lines
+
+/// The line being sung, word by word, the way Apple Music draws it: each word fills with
+/// light from left to right across its own length (with a soft edge), rises a little as it's
+/// sung, and long held words swell and glow.
+struct SungLineView: View {
+    let words: [TimedWord]
+    let engine: AudioEngineManager
+    var fontSize: CGFloat = 30
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: nil, paused: !engine.isPlaying)) { _ in
+            let time = engine.preciseCurrentTime
+            LyricWordsLayout(wordSpacing: fontSize * 0.26, lineSpacing: fontSize * 0.12) {
+                ForEach(Array(words.enumerated()), id: \.offset) { _, word in
+                    SungWord(word: word, time: time, fontSize: fontSize)
+                }
+            }
+        }
+    }
+}
+
+private struct SungWord: View {
+    let word: TimedWord
+    let time: TimeInterval
+    let fontSize: CGFloat
+
+    var body: some View {
+        let text = word.text.trimmingCharacters(in: .whitespaces)
+        let length = max(0.05, word.end - word.start)
+        let progress = min(max((time - word.start) / length, 0), 1)
+        // Long held words (a second or more, short enough to swell nicely) get Apple's emphasis.
+        let emphasized = length >= 1 && text.count <= 7
+        let swell = emphasized ? sin(.pi * progress) : 0
+        let lift = -fontSize * 0.09 * Self.easeOut(progress)
+        let feather = 0.35
+        let edge = -feather + progress * (1 + 2 * feather)
+
+        Text(text)
+            .font(.system(size: fontSize, weight: .bold))
+            .foregroundStyle(.white.opacity(0.3))
+            .overlay {
+                Text(text)
+                    .font(.system(size: fontSize, weight: .bold))
+                    .foregroundStyle(.white)
+                    .mask(
+                        LinearGradient(colors: [.white, .white.opacity(0)],
+                                       startPoint: UnitPoint(x: edge - feather, y: 0.5),
+                                       endPoint: UnitPoint(x: edge + feather, y: 0.5))
+                    )
+                    .shadow(color: .white.opacity(0.55 * swell), radius: 9 * swell)
+            }
+            .scaleEffect(1 + 0.09 * swell, anchor: .bottom)
+            .offset(y: lift)
+    }
+
+    private static func easeOut(_ x: Double) -> Double { 1 - pow(1 - x, 3) }
+}
+
+/// Lays words out left to right, wrapping like text.
+private struct LyricWordsLayout: Layout {
+    var wordSpacing: CGFloat
+    var lineSpacing: CGFloat
+
+    private func rows(_ subviews: Subviews, width: CGFloat) -> [[(index: Int, size: CGSize)]] {
+        var rows: [[(index: Int, size: CGSize)]] = [[]]
+        var x: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width {
+                rows.append([])
+                x = 0
+            }
+            rows[rows.count - 1].append((index, size))
+            x += size.width + wordSpacing
+        }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let rows = rows(subviews, width: width)
+        let height = rows.map { $0.map(\.size.height).max() ?? 0 }.reduce(0, +) + lineSpacing * CGFloat(max(rows.count - 1, 0))
+        let used = rows.map { row in row.map(\.size.width).reduce(0, +) + wordSpacing * CGFloat(max(row.count - 1, 0)) }.max() ?? 0
+        return CGSize(width: proposal.width ?? used, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(subviews, width: bounds.width) {
+            var x = bounds.minX
+            let height = row.map(\.size.height).max() ?? 0
+            for item in row {
+                subviews[item.index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(item.size))
+                x += item.size.width + wordSpacing
+            }
+            y += height + lineSpacing
+        }
     }
 }
