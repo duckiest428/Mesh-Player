@@ -1661,34 +1661,40 @@ class AppStateManager: ObservableObject {
 }
 
 
+/// The three dots shown during an instrumental break in synced lyrics. They fill in one by one
+/// across the break and gently breathe, like Apple Music, redrawn every frame from the player's
+/// exact position so the motion stays smooth.
 struct InstrumentalBreakDots: View {
-    let currentTime: TimeInterval
+    @ObservedObject var engine: AudioEngineManager
     let breakStart: TimeInterval
     let breakEnd: TimeInterval
+    var dotSize: CGFloat = 12
 
     var body: some View {
-        let duration = max(0.1, breakEnd - breakStart)
-        let elapsed = currentTime - breakStart
-        let fraction = min(max(0.0, elapsed / duration), 1.0)
+        TimelineView(.animation(minimumInterval: nil, paused: !engine.isPlaying)) { context in
+            let time = engine.preciseCurrentTime
+            let duration = max(0.1, breakEnd - breakStart)
+            let fraction = min(max(0, (time - breakStart) / duration), 1)
+            let remaining = breakEnd - time
+            // Fades out and shrinks away just before the next line, then the line takes over.
+            let ending = remaining <= 0.6 ? min(max(0, remaining / 0.6), 1) : 1
+            let breath = 1 + 0.06 * sin(context.date.timeIntervalSinceReferenceDate * 2 * .pi / 2.4)
 
-        let remainingTime = breakEnd - currentTime
-        let containerOpacity = remainingTime <= 0.7 ? min(max(0.0, remainingTime / 0.7), 1.0) : 1.0
-
-        let d1Opacity = min(1.0, max(0.2, fraction / 0.33))
-        let d2Opacity = min(1.0, max(0.2, (fraction - 0.33) / 0.33))
-        let d3Opacity = min(1.0, max(0.2, (fraction - 0.66) / 0.34))
-
-        HStack(spacing: 20) {
-            ForEach(Array([d1Opacity, d2Opacity, d3Opacity].enumerated()), id: \.offset) { _, opacity in
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 12, height: 12)
-                    .opacity(opacity)
-                    .scaleEffect(opacity > 0.6 ? 1.15 : 1.0)
+            HStack(spacing: dotSize * 0.9) {
+                ForEach(0..<3, id: \.self) { index in
+                    let start = Double(index) / 3
+                    let fill = min(max((fraction - start) * 3, 0), 1)
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: dotSize, height: dotSize)
+                        .opacity(0.25 + 0.75 * fill)
+                        .scaleEffect(0.85 + 0.15 * fill)
+                }
             }
+            .scaleEffect(breath * (0.7 + 0.3 * ending), anchor: .leading)
+            .opacity(ending)
+            .padding(.vertical, 14)
         }
-        .padding(.vertical, 14)
-        .opacity(containerOpacity)
     }
 }
 

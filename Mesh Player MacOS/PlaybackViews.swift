@@ -1151,7 +1151,7 @@ struct FullLyricsList: View {
                         LyricLineView(
                             line: line,
                             isActive: activeLineId == line.id,
-                            currentTime: line.isBreak ? timeTracker.currentTime : 0,
+                            engine: engine,
                             onSeek: { engine.seek(to: $0) }
                         )
                         .equatable()
@@ -1185,17 +1185,13 @@ struct FullLyricsList: View {
 struct LyricLineView: View, Equatable {
     let line: SyncedLyricLine
     let isActive: Bool
-    let currentTime: TimeInterval
+    /// Break dots animate themselves from the engine; lyric lines never redraw for time.
+    let engine: AudioEngineManager
     let onSeek: (TimeInterval) -> Void
     @State private var isHovered = false
 
     static func == (lhs: LyricLineView, rhs: LyricLineView) -> Bool {
-        if lhs.line.id != rhs.line.id { return false }
-        if lhs.isActive != rhs.isActive { return false }
-        if lhs.line.isBreak {
-            return Int(lhs.currentTime * 4.0) == Int(rhs.currentTime * 4.0)
-        }
-        return true
+        lhs.line.id == rhs.line.id && lhs.isActive == rhs.isActive
     }
 
     private static let adlibRegex = try? NSRegularExpression(pattern: "(\\(.*?\\)|\\[.*?\\])", options: [])
@@ -1220,7 +1216,7 @@ struct LyricLineView: View, Equatable {
     var body: some View {
         Group {
             if line.isBreak {
-                InstrumentalBreakDots(currentTime: currentTime, breakStart: line.breakStart, breakEnd: line.breakEnd)
+                InstrumentalBreakDots(engine: engine, breakStart: line.breakStart, breakEnd: line.breakEnd)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 let parsed = parseAdlibs(from: line.text)

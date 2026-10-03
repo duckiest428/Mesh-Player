@@ -1650,7 +1650,7 @@ struct LyricsSidebarView: View {
                                 let isActive = line.id == activeLineId
                                 Group {
                                     if line.isBreak {
-                                        InstrumentalBreakDots(currentTime: timeTracker.currentTime, breakStart: line.breakStart, breakEnd: line.breakEnd)
+                                        InstrumentalBreakDots(engine: engine, breakStart: line.breakStart, breakEnd: line.breakEnd)
                                             .scaleEffect(0.6, anchor: .leading)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     } else {

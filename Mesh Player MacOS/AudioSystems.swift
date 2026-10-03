@@ -66,6 +66,13 @@ class AudioEngineManager: ObservableObject {
     
     // Core Change: Replaced AVAudioPlayer with AVPlayer for system spatial routing
     private var player: AVPlayer?
+
+    /// The exact playback position, read straight from the player (the published time only
+    /// updates a few times a second). For per-frame animations such as the lyrics' break dots.
+    var preciseCurrentTime: TimeInterval {
+        guard let seconds = player?.currentTime().seconds, seconds.isFinite else { return timeTracker.currentTime }
+        return seconds
+    }
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
     
