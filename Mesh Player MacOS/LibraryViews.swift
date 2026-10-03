@@ -1619,6 +1619,7 @@ struct LyricsSidebarView: View {
     @ObservedObject var timeTracker: AudioTimeTracker
 
     @State private var activeLineId: UUID?
+    @ObservedObject private var translator = LyricsTranslator.shared
 
     var body: some View {
         let theme = state.theme
@@ -1654,11 +1655,18 @@ struct LyricsSidebarView: View {
                                             .scaleEffect(0.6, anchor: .leading)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     } else {
-                                        Text(line.text)
-                                            .font(.system(size: 17, weight: .bold))
-                                            .foregroundStyle(isActive ? theme.textPrimary : theme.textPrimary.opacity(0.28))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .animation(.easeOut(duration: 0.25), value: isActive)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(line.text)
+                                                .font(.system(size: 17, weight: .bold))
+                                                .foregroundStyle(isActive ? theme.textPrimary : theme.textPrimary.opacity(0.28))
+                                            if let translation = translator.translations[line.id] {
+                                                Text(translation)
+                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .foregroundStyle(isActive ? theme.textSecondary : theme.textPrimary.opacity(0.18))
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .animation(.easeOut(duration: 0.25), value: isActive)
                                     }
                                 }
                                 .contentShape(Rectangle())

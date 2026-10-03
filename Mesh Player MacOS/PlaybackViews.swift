@@ -528,6 +528,11 @@ struct FullLyricsView: View {
     @State private var appeared = false
     @State private var backCount = 0
     @State private var forwardCount = 0
+    @State private var windowIsFullScreen = false
+    @ObservedObject private var translator = LyricsTranslator.shared
+    @AppStorage(LyricsSettings.translateKey) private var translateLyrics = false
+    @AppStorage(LyricsSettings.translationLanguageKey) private var translationLanguage = ""
+    @ObservedObject private var translationLanguages = TranslationLanguages.shared
 
     @AppStorage("enableDynamicBackground") private var enableDynamicBackground = true
 
@@ -619,6 +624,8 @@ struct FullLyricsView: View {
                 .ignoresSafeArea()
 
             // The top bar floats over the content so the player is centred in the whole window.
+            // Only the player and its panel zoom with ⌘+/⌘-; the top bar stays pinned level with
+            // the window buttons, the way Apple Music keeps it.
             ZStack(alignment: .top) {
                 GeometryReader { geo in
                 // With a panel open the window splits into two equal halves and the player sits
@@ -631,7 +638,7 @@ struct FullLyricsView: View {
                         Group {
                             switch effectiveRightPanel {
                             case .lyrics:
-                                FullLyricsList(engine: engine, timeTracker: timeTracker)
+                                FullLyricsList(engine: engine, timeTracker: timeTracker, translations: translator.translations)
                                     .frame(maxWidth: 560)
                                     .frame(maxWidth: .infinity)
                             case .queue:
@@ -655,12 +662,17 @@ struct FullLyricsView: View {
                 .padding(.horizontal, 56)
                 .padding(.vertical, 28)
                 .animation(.spring(response: 0.5, dampingFraction: 0.86), value: effectiveRightPanel)
+                .contentZoom()
+                .padding(.top, 36)
 
                 topBar(effectiveRightPanel)
             }
         }
+        .ignoresSafeArea()
+        .background(WindowFullScreenReader(isFullScreen: $windowIsFullScreen))
         .environment(\.colorScheme, .dark)
         .onAppear {
+            translationLanguages.load()
             updateCachedColors()
             // The artwork grows in first and the controls rise just after, like Apple Music.
             withAnimation(.spring(response: 0.6, dampingFraction: 0.82).delay(0.08)) { appeared = true }
@@ -693,6 +705,10 @@ struct FullLyricsView: View {
             .help("Close (Esc)")
 
             Spacer()
+
+            if hasLyrics && LyricsSettings.isTranslationAvailable {
+                translateMenu(glass)
+            }
 
             Button {
                 rightPanel = rightPanel == .lyrics ? .none : .lyrics
@@ -728,9 +744,47 @@ struct FullLyricsView: View {
             .buttonStyle(IconButtonStyle(theme: glass, isActive: enableDynamicBackground, size: 34, activeColor: .white))
             .help("Dynamic Background")
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 34)
-        .padding(.bottom, 8)
+        // Level with the window's close/minimise/zoom buttons, and clear of them in a window.
+        .padding(.leading, windowIsFullScreen ? 20 : 84)
+        .padding(.trailing, 20)
+        .padding(.top, 10)
+    }
+
+    /// Apple Music's translate button: show or hide translations, and pick the language.
+    private func translateMenu(_ glass: ThemeColor) -> some View {
+        Menu {
+            Toggle("Show Translation", isOn: $translateLyrics)
+            Picker("Translate Into", selection: $translationLanguage) {
+                Text("\(LyricsSettings.displayName("")) (System Language)").tag("")
+                Divider()
+                ForEach(translationLanguages.identifiers, id: \.self) { id in
+                    Text(LyricsSettings.displayName(id)).tag(id)
+                }
+            }
+            if translateLyrics, let note = translationNote {
+                Divider()
+                Text(note)
+            }
+        } label: {
+            Image(systemName: "translate").font(.system(size: 14, weight: .semibold))
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(IconButtonStyle(theme: glass, isActive: translateLyrics, size: 34, activeColor: .white))
+        .fixedSize()
+        .help(translateLyrics ? "Translation: \(LyricsSettings.displayName(translationLanguage))" : "Translate Lyrics")
+        // Picking a language means you want to see it.
+        .onChange(of: translationLanguage) { _, _ in translateLyrics = true }
+    }
+
+    private var translationNote: String? {
+        let language = LyricsSettings.displayName(translationLanguage)
+        switch translator.status {
+        case .off, .translated: return nil
+        case .translating: return "Translating into \(language)…"
+        case .alreadyInLanguage: return "These lyrics are already in \(language)"
+        case .failed: return "Couldn't translate these lyrics"
+        }
     }
 
     /// Artwork size as Apple Music sizes it: a bit under half the window's height, leaving room
@@ -1141,9 +1195,9 @@ struct FullscreenProgressBar: View {
 struct FullLyricsList: View {
     @ObservedObject var engine: AudioEngineManager
     @ObservedObject var timeTracker: AudioTimeTracker
+    /// Line id → the line in the chosen language.
+    var translations: [UUID: String] = [:]
     @State private var activeLineId: UUID?
-    @State private var translations: [UUID: String] = [:]
-    @AppStorage(ExperimentalSettings.translateLyricsKey) private var translateLyrics = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1172,7 +1226,6 @@ struct FullLyricsList: View {
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             )
-            .lyricsTranslation(engine.parsedLyrics, enabled: translateLyrics, into: $translations)
             .onChange(of: timeTracker.currentTime) { _, newValue in
                 guard let current = engine.parsedLyrics.last(where: { $0.timestamp <= newValue }),
                       current.id != activeLineId else { return }
@@ -1276,5 +1329,46 @@ struct LyricLineView: View, Equatable {
         }
         .onTapGesture { onSeek(line.timestamp) }
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isActive)
+    }
+}
+
+/// Tells whether the window is in macOS full screen, where the window buttons are hidden.
+struct WindowFullScreenReader: NSViewRepresentable {
+    @Binding var isFullScreen: Bool
+
+    func makeNSView(context: Context) -> ReaderView {
+        let view = ReaderView()
+        view.onChange = { value in
+            if isFullScreen != value { isFullScreen = value }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: ReaderView, context: Context) {}
+
+    final class ReaderView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard let window else { return }
+            report(window)
+            for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification, NSWindow.willEnterFullScreenNotification, NSWindow.willExitFullScreenNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] note in
+                    let entering = note.name == NSWindow.willEnterFullScreenNotification || note.name == NSWindow.didEnterFullScreenNotification
+                    MainActor.assumeIsolated { self?.onChange?(entering) }
+                })
+            }
+        }
+
+        private func report(_ window: NSWindow) {
+            let value = window.styleMask.contains(.fullScreen)
+            DispatchQueue.main.async { [weak self] in self?.onChange?(value) }
+        }
+
+        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     }
 }

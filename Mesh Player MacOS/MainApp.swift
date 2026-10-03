@@ -20,6 +20,7 @@ struct macOSMusicPlayerContentView: View {
     @ObservedObject private var appleMusicSync = AppleMusicSync.shared
     @State private var isDropTargeted = false
     @State private var tabBeforeSearch: String?
+    @AppStorage(ExperimentalSettings.wordLyricsKey) private var wordLyrics = false
 
     var body: some View {
         let theme = state.theme
@@ -90,8 +91,8 @@ struct macOSMusicPlayerContentView: View {
             }
 
             if state.showFullscreenPlayer {
+                // Zooms its own player and lyrics, keeping its top bar where it is.
                 FullLyricsView(state: state, engine: engine, timeTracker: engine.timeTracker, isPresented: $state.showFullscreenPlayer)
-                    .contentZoom()
                     .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
                                             removal: .move(edge: .bottom).combined(with: .opacity)))
                     .zIndex(10)
@@ -101,6 +102,8 @@ struct macOSMusicPlayerContentView: View {
         .preferredColorScheme(theme.colorScheme)
         .tint(theme.accent)
         .onChange(of: state.searchKeyword) { _, query in routeSearch(query) }
+        .onChange(of: wordLyrics) { _, _ in engine.reloadLyrics() }
+        .background(LyricsTranslationHost(engine: engine))
         .onAppear {
             LibraryManager.shared.startMonitoringAutoAddFolder { urls in
                 MainActor.assumeIsolated {
@@ -337,6 +340,20 @@ struct DetailRouter: View {
     }
 }
 
+/// Translates the current song's lyrics for every lyrics view, once. Lives in the main window
+/// so macOS's language download prompt has somewhere to appear.
+private struct LyricsTranslationHost: View {
+    @ObservedObject var engine: AudioEngineManager
+    @AppStorage(LyricsSettings.translateKey) private var translateLyrics = false
+    @AppStorage(LyricsSettings.translationLanguageKey) private var translationLanguage = ""
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .lyricsTranslation(engine.parsedLyrics, enabled: translateLyrics, target: translationLanguage)
+    }
+}
+
 // MARK: - Settings
 
 struct PreferencesView: View {
@@ -347,14 +364,9 @@ struct PreferencesView: View {
     @AppStorage("dev_bypass_replay_timegate") var bypassReplayTimegate: Bool = false
     @State private var section: Section = .appearance
     @AppStorage(ExperimentalSettings.wordLyricsKey) private var wordLyrics = false
-    @AppStorage(ExperimentalSettings.translateLyricsKey) private var translateLyrics = false
-
-    private var translationCaption: String {
-        if #available(macOS 15.0, *) {
-            return "Shows a translation into your language under each line of lyrics in another language, using Apple's on-device translation."
-        }
-        return "Needs macOS 15 or later."
-    }
+    @AppStorage(LyricsSettings.translateKey) private var translateLyrics = false
+    @AppStorage(LyricsSettings.translationLanguageKey) private var translationLanguage = ""
+    @ObservedObject private var translationLanguages = TranslationLanguages.shared
     @State private var confirm: Confirmation?
     @State private var notice: String?
 
@@ -542,11 +554,27 @@ struct PreferencesView: View {
             settingsGroup(theme, title: "Play Counts") {
                 caption("A play is counted once you've heard half of a song. Last.fm scrobbles after half the song or 4 minutes, whichever comes first.", theme)
             }
+            settingsGroup(theme, title: "Lyrics Translation") {
+                if LyricsSettings.isTranslationAvailable {
+                    Toggle("Show translations under lyrics", isOn: $translateLyrics)
+                    Picker("Translate into", selection: $translationLanguage) {
+                        Text("\(LyricsSettings.displayName("")) (System Language)").tag("")
+                        Divider()
+                        ForEach(translationLanguages.identifiers, id: \.self) { id in
+                            Text(LyricsSettings.displayName(id)).tag(id)
+                        }
+                    }
+                    .frame(maxWidth: 320)
+                    .disabled(!translateLyrics)
+                    caption("Lyrics in another language get a translation under each line, made on your Mac by Apple's translation. The first time, macOS may ask to download the languages. You can also switch it from the translate button in the full screen player.", theme)
+                } else {
+                    caption("Translating lyrics needs macOS 15 or later.", theme)
+                }
+            }
+            .onAppear { translationLanguages.load() }
             settingsGroup(theme, title: "Experimental") {
                 Toggle("Word-by-word lyrics", isOn: $wordLyrics)
-                caption("Looks up lyrics timed to each word (from NetEase Cloud Music) and lights the words up as they're sung. Takes effect from the next song.", theme)
-                Toggle("Translate lyrics", isOn: $translateLyrics)
-                caption(translationCaption, theme)
+                caption("Lights each word up as it's sung, like Apple Music. The timing comes from NetEase Cloud Music and is matched to your song's own lyrics, so it only appears for songs NetEase has word timing for.", theme)
             }
         case .library:
             let stats = state.libraryStats
