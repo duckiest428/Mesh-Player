@@ -43,7 +43,11 @@ final class MusicAppMirror: ObservableObject {
     private weak var engine: AudioEngineManager?
     private var cancellables: Set<AnyCancellable> = []
     private var mirroredTrackID: UUID?
+    /// The Music track name being mirrored, to spot when Music is skipped from outside.
+    private var mirroredName: String?
     private var resyncTimer: Timer?
+    /// When we last told Music to do something; its own notifications right after are ours.
+    private var lastCommand = Date.distantPast
     /// Music's volume before mirroring muted it (kept in UserDefaults in case the app quits).
     private var savedVolume: Int? {
         get { UserDefaults.standard.object(forKey: "musicMirror.savedVolume") as? Int }
@@ -63,6 +67,15 @@ final class MusicAppMirror: ObservableObject {
             .dropFirst()
             .sink { [weak self] playing in
                 Task { @MainActor in self?.playbackChanged(playing) }
+            }
+            .store(in: &cancellables)
+        // Media keys or AirPods that reach Music while it's mirroring are passed on to us.
+        DistributedNotificationCenter.default().publisher(for: Notification.Name("com.apple.Music.playerInfo"))
+            .sink { [weak self] note in
+                let info = note.userInfo ?? [:]
+                let state = info["Player State"] as? String
+                let name = info["Name"] as? String
+                MainActor.assumeIsolated { self?.musicChanged(state: state, name: name) }
             }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
@@ -99,8 +112,11 @@ final class MusicAppMirror: ObservableObject {
         if savedVolume == nil, parts.count == 2, let volume = Int(parts[1]), volume > 0 { savedVolume = volume }
         if parts.first == "ok" {
             mirroredTrackID = track.id
+            mirroredName = nil
             status = .mirroring(track.title)
             startResync()
+            // Music playing would otherwise take over the media keys and AirPods.
+            engine?.reassertNowPlaying()
         } else {
             // Not in the Music library: stop whatever Music was doing so it doesn't play on silently.
             if mirroredTrackID != nil { run("tell application \"Music\" to pause") }
@@ -127,6 +143,7 @@ final class MusicAppMirror: ObservableObject {
                     end tell
                     """)
                     startResync()
+                    engine.reassertNowPlaying()
                 } else {
                     trackStarted(track)
                 }
@@ -135,6 +152,29 @@ final class MusicAppMirror: ObservableObject {
             run("tell application \"Music\" to pause")
             resyncTimer?.invalidate()
         }
+    }
+
+    /// Music changed state. Changes we caused are ignored; anything else came from the media
+    /// keys, AirPods or Control Center while Music had them, so Mesh Player does the same.
+    private func musicChanged(state: String?, name: String?) {
+        guard isEnabled, mirroredTrackID != nil, let engine, let state else { return }
+        if state == "Playing", mirroredName == nil { mirroredName = name }
+        guard Date().timeIntervalSince(lastCommand) > 2 else { return }
+        switch state {
+        case "Paused", "Stopped":
+            // Music reaching the end of its copy a moment early isn't a pause.
+            if engine.isPlaying && engine.currentTime < engine.duration - 6 { engine.pause() }
+        case "Playing":
+            if let name, let mirroredName, name != mirroredName {
+                // Skipped in Music: skip here too (which mirrors the new song).
+                engine.onPlayNext?()
+            } else if !engine.isPlaying {
+                engine.play()
+            }
+        default:
+            break
+        }
+        engine.reassertNowPlaying()
     }
 
     /// Keeps Music within a couple of seconds of Mesh Player (the two drift apart slowly).
@@ -159,6 +199,7 @@ final class MusicAppMirror: ObservableObject {
         resyncTimer = nil
         if mirroredTrackID != nil { run("tell application \"Music\" to pause") }
         mirroredTrackID = nil
+        mirroredName = nil
         restoreVolume()
     }
 
@@ -200,6 +241,7 @@ final class MusicAppMirror: ObservableObject {
     @discardableResult
     private func run(_ source: String) -> NSAppleEventDescriptor? {
         guard let script = NSAppleScript(source: source) else { return nil }
+        lastCommand = Date()
         var error: NSDictionary?
         let result = script.executeAndReturnError(&error)
         if let error { print("Music mirror script error: \(error)") }

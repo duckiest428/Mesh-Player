@@ -152,50 +152,75 @@ class AudioEngineManager: ObservableObject {
         #endif
     }
     
+    /// The media keys (F7, F8, F9), AirPods and headphone controls, Control Center and the
+    /// Touch Bar all arrive here. macOS sends them to whichever app last said it's playing, so
+    /// `updateNowPlayingInfo` keeps telling it.
     private func setupRemoteCommandCenter() {
         let commandCenter = MPRemoteCommandCenter.shared()
-        
+
         commandCenter.playCommand.isEnabled = true
-        commandCenter.playCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            if !self.isPlaying {
-                self.togglePlayPause()
-            }
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            MainActor.assumeIsolated { self.play() }
             return .success
         }
-        
+
+        // Taking an AirPod out sends "pause", never "toggle", so it must not start playback.
         commandCenter.pauseCommand.isEnabled = true
-        commandCenter.pauseCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            if self.isPlaying {
-                self.togglePlayPause()
-            }
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            MainActor.assumeIsolated { self.pause() }
             return .success
         }
-        
+
         commandCenter.togglePlayPauseCommand.isEnabled = true
-        commandCenter.togglePlayPauseCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            self.togglePlayPause()
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            MainActor.assumeIsolated { self.togglePlayPause() }
             return .success
         }
-        
+
+        commandCenter.stopCommand.isEnabled = true
+        commandCenter.stopCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            MainActor.assumeIsolated { self.pause() }
+            return .success
+        }
+
         commandCenter.nextTrackCommand.isEnabled = true
-        commandCenter.nextTrackCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            if let track = self.currentTrack { self.onTrackFinished?(track) }
-                self.onPlayNext?()
+        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+            guard let self, self.currentTrack != nil else { return .noActionableNowPlayingItem }
+            MainActor.assumeIsolated { self.onPlayNext?() }
             return .success
         }
-        
+
         commandCenter.previousTrackCommand.isEnabled = true
-        commandCenter.previousTrackCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            self.onPlayPrevious?()
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+            guard let self, self.currentTrack != nil else { return .noActionableNowPlayingItem }
+            MainActor.assumeIsolated { self.onPlayPrevious?() }
             return .success
         }
+
+        // Dragging the time in Control Center or the menu bar's Now Playing.
+        commandCenter.changePlaybackPositionCommand.isEnabled = true
+        commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self, let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            MainActor.assumeIsolated { self.seek(to: event.positionTime) }
+            return .success
+        }
+
+        // Not supported: hide them so the keys map to next/previous rather than seeking.
+        commandCenter.skipForwardCommand.isEnabled = false
+        commandCenter.skipBackwardCommand.isEnabled = false
+        commandCenter.seekForwardCommand.isEnabled = false
+        commandCenter.seekBackwardCommand.isEnabled = false
     }
-    
+
+    /// Claims the media keys again, e.g. after the Music app was told to play (mirroring).
+    func reassertNowPlaying() {
+        updateNowPlayingInfo()
+    }
+
     private func updateNowPlayingInfo(refreshArtwork: Bool = false) {
         SystemMediaManager.shared.updateNowPlayingInfo(track: currentTrack, isPlaying: isPlaying, currentTime: currentTime, refreshArtwork: refreshArtwork)
     }
@@ -431,51 +456,6 @@ class SystemMediaManager {
     
     private init() {}
     
-    var onTogglePlayPause: (() -> Void)?
-    var onPlayNext: (() -> Void)?
-    var onPlayPrevious: (() -> Void)?
-    
-    func setupRemoteCommandCenter() {
-        let commandCenter = MPRemoteCommandCenter.shared()
-        
-        // MPRemoteCommandCenter Setup: Hook into native media player commands so physical media keys (Play, Pause, Skip) respond immediately and register Mesh Player globally to macOS.
-        commandCenter.playCommand.isEnabled = true
-        commandCenter.playCommand.addTarget { [weak self] event in
-            self?.onTogglePlayPause?()
-            return .success
-        }
-        
-        commandCenter.pauseCommand.isEnabled = true
-        commandCenter.pauseCommand.addTarget { [weak self] event in
-            self?.onTogglePlayPause?()
-            return .success
-        }
-        
-        commandCenter.togglePlayPauseCommand.isEnabled = true
-        commandCenter.togglePlayPauseCommand.addTarget { [weak self] event in
-            self?.onTogglePlayPause?()
-            return .success
-        }
-        
-        commandCenter.nextTrackCommand.isEnabled = true
-        commandCenter.nextTrackCommand.addTarget { [weak self] event in
-            self?.onPlayNext?()
-            return .success
-        }
-        
-        commandCenter.previousTrackCommand.isEnabled = true
-        commandCenter.previousTrackCommand.addTarget { [weak self] event in
-            self?.onPlayPrevious?()
-            return .success
-        }
-        
-        commandCenter.changePlaybackPositionCommand.isEnabled = true
-        commandCenter.changePlaybackPositionCommand.addTarget { event in
-            // Handle scrubbing if needed
-            return .success
-        }
-    }
-    
     private var artworkTrackKey: String?
 
     /// Built outside the main actor: MediaPlayer calls the handler on a background thread.
@@ -520,6 +500,9 @@ class SystemMediaManager {
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        // macOS routes the media keys and AirPods to the app whose playback state says it's
+        // playing (or paused most recently); without this they often went to the Music app.
+        MPNowPlayingInfoCenter.default().playbackState = track == nil ? .stopped : (isPlaying ? .playing : .paused)
         
         // Broadcast system-wide Darwin notification for robust scrobbler integration (e.g., standard Apple Music/iTunes media state signatures)
         var userInfo = [String: Any]()
