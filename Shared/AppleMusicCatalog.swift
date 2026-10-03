@@ -19,9 +19,46 @@ nonisolated struct CatalogAlbumInfo: Codable, Hashable, Sendable, Identifiable {
     var notesStandard: String?
     var url: String?
     var trackCount: Int?
+    /// "explicit", "clean" or nil.
+    var contentRating: String? = nil
+    var isSingle: Bool? = nil
+    /// The album's full track list on Apple Music (nil until looked up).
+    var tracks: [CatalogTrackInfo]? = nil
 
     var year: String? { releaseDate.map { String($0.prefix(4)) } }
+    var isExplicit: Bool { contentRating == "explicit" }
     func artworkURL(_ size: Int) -> URL? { AppleMusicCatalog.imageURL(artworkTemplate, size: size) }
+
+    /// "January 15, 2016", as Apple Music shows it.
+    var releaseDateText: String? {
+        guard let releaseDate else { return nil }
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        guard let date = parser.date(from: String(releaseDate.prefix(10))) else { return nil }
+        return date.formatted(date: .long, time: .omitted)
+    }
+
+    /// Apple Music's own classification: singles are flagged, EPs end in " - EP".
+    var kind: String {
+        if isSingle == true || name.hasSuffix(" - Single") { return "Single" }
+        if name.hasSuffix(" - EP") { return "EP" }
+        return "Album"
+    }
+}
+
+nonisolated struct CatalogTrackInfo: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var name: String
+    var artist: String
+    var trackNumber: Int?
+    var discNumber: Int?
+    var durationMs: Int?
+    var contentRating: String?
+    var url: String?
+
+    var isExplicit: Bool { contentRating == "explicit" }
+    var duration: TimeInterval { Double(durationMs ?? 0) / 1000 }
 }
 
 nonisolated struct CatalogArtistInfo: Codable, Hashable, Sendable {
@@ -63,7 +100,7 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Mesh Player", isDirectory: true)
         try? FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
-        cacheURL = caches.appendingPathComponent("apple-music-catalog.json")
+        cacheURL = caches.appendingPathComponent("apple-music-catalog-v2.json")
         if let data = try? Data(contentsOf: cacheURL), let decoded = try? JSONDecoder().decode(Cache.self, from: data) {
             cache = decoded
         }
@@ -85,7 +122,8 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
 
     func album(named album: String, artist: String) async -> CatalogAlbumInfo? {
         let key = Self.albumKey(album, artist)
-        if let hit = lock.withLock({ cache.albums[key] }), hit.isFresh { return hit.value }
+        // Entries cached before track lists were looked up are refreshed once.
+        if let hit = lock.withLock({ cache.albums[key] }), hit.isFresh, hit.value == nil || hit.value?.tracks != nil { return hit.value }
         await once("album:" + key) { [self] in
             let found = await lookUpAlbum(album, artist: artist)
             lock.withLock { cache.albums[key] = Stamped(value: found, checked: Date()) }
@@ -136,14 +174,38 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
               let results = json["results"] as? [String: Any],
               let items = (results["albums"] as? [String: Any])?["data"] as? [[String: Any]] else { return nil }
         let albums = items.compactMap(Self.album(from:))
-        let wantedArtist = artist.lowercased()
-        let sameArtist = albums.filter { item in
-            let a = item.artist.lowercased()
-            return a.contains(wantedArtist) || wantedArtist.contains(a)
+        let sameArtist = albums.filter { AnimatedArtworkService.artistsMatch($0.artist, artist) }
+        // Exact title first, then the title without edition suffixes. When an album has an
+        // explicit and a clean version, the one with editor's notes (usually explicit) wins.
+        func best(_ candidates: [CatalogAlbumInfo]) -> CatalogAlbumInfo? {
+            candidates.first { $0.notesShort != nil || $0.notesStandard != nil } ?? candidates.first { $0.isExplicit } ?? candidates.first
         }
-        // Exact title first, then the title without edition suffixes.
-        return sameArtist.first { $0.name.caseInsensitiveCompare(album) == .orderedSame }
-            ?? sameArtist.first { AnimatedArtworkService.normalize($0.name).caseInsensitiveCompare(clean) == .orderedSame }
+        guard var found = best(sameArtist.filter { $0.name.caseInsensitiveCompare(album) == .orderedSame })
+                ?? best(sameArtist.filter { AnimatedArtworkService.normalize($0.name).caseInsensitiveCompare(clean) == .orderedSame }) else { return nil }
+        if let detail = await get("albums/\(found.id)", query: ["include": "tracks"]),
+           let data = (detail["data"] as? [[String: Any]])?.first {
+            let tracks = ((data["relationships"] as? [String: Any])?["tracks"] as? [String: Any])?["data"] as? [[String: Any]] ?? []
+            found.tracks = tracks.compactMap(Self.track(from:))
+        } else {
+            found.tracks = []
+        }
+        return found
+    }
+
+    private static func track(from item: [String: Any]) -> CatalogTrackInfo? {
+        guard let id = item["id"] as? String,
+              let attributes = item["attributes"] as? [String: Any],
+              let name = attributes["name"] as? String else { return nil }
+        return CatalogTrackInfo(
+            id: id,
+            name: name,
+            artist: attributes["artistName"] as? String ?? "",
+            trackNumber: attributes["trackNumber"] as? Int,
+            discNumber: attributes["discNumber"] as? Int,
+            durationMs: attributes["durationInMillis"] as? Int,
+            contentRating: attributes["contentRating"] as? String,
+            url: attributes["url"] as? String
+        )
     }
 
     private func lookUpArtist(_ name: String) async -> CatalogArtistInfo? {
@@ -152,6 +214,7 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
               let items = (results["artists"] as? [String: Any])?["data"] as? [[String: Any]],
               !items.isEmpty else { return nil }
         let match = items.first { (($0["attributes"] as? [String: Any])?["name"] as? String)?.caseInsensitiveCompare(name) == .orderedSame }
+            ?? items.first { AnimatedArtworkService.artistsMatch((($0["attributes"] as? [String: Any])?["name"] as? String) ?? "", name) }
         guard let item = match ?? (items.count == 1 ? items.first : nil),
               let id = item["id"] as? String else { return nil }
 
@@ -186,7 +249,9 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
             notesShort: (notes?["short"] as? String).map(plainText),
             notesStandard: (notes?["standard"] as? String).map(plainText),
             url: attributes["url"] as? String,
-            trackCount: attributes["trackCount"] as? Int
+            trackCount: attributes["trackCount"] as? Int,
+            contentRating: attributes["contentRating"] as? String,
+            isSingle: attributes["isSingle"] as? Bool
         )
     }
 

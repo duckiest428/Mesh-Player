@@ -31,7 +31,7 @@ nonisolated final class AnimatedArtworkService: @unchecked Sendable {
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Mesh Player", isDirectory: true)
         try? FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
-        cacheURL = caches.appendingPathComponent("animated-artwork.json")
+        cacheURL = caches.appendingPathComponent("animated-artwork-v2.json")
         if let data = try? Data(contentsOf: cacheURL), let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) {
             entries = decoded
         }
@@ -121,14 +121,12 @@ nonisolated final class AnimatedArtworkService: @unchecked Sendable {
               let results = json["results"] as? [String: Any],
               let albums = (results["albums"] as? [String: Any])?["data"] as? [[String: Any]] else { return nil }
 
-        let wantedArtist = artist.lowercased()
         var fallback: (URL?, URL?)?
         for item in albums {
             guard let attributes = item["attributes"] as? [String: Any],
                   let name = attributes["name"] as? String,
                   Self.normalize(name).caseInsensitiveCompare(cleanAlbum) == .orderedSame else { continue }
-            let itemArtist = (attributes["artistName"] as? String ?? "").lowercased()
-            guard itemArtist.contains(wantedArtist) || wantedArtist.contains(itemArtist) else { continue }
+            guard Self.artistsMatch(attributes["artistName"] as? String ?? "", artist) else { continue }
             guard let video = attributes["editorialVideo"] as? [String: Any] else { continue }
             func stream(_ key: String) -> URL? {
                 ((video[key] as? [String: Any])?["video"] as? String).flatMap(URL.init(string:))
@@ -139,6 +137,25 @@ nonisolated final class AnimatedArtworkService: @unchecked Sendable {
             if fallback == nil { fallback = (square, tall) }
         }
         return fallback.map { ($0.0, $0.1) }
+    }
+
+    /// The individual artists in a credit like "Bruno Mars, Anderson .Paak & Silk Sonic".
+    static func artistNames(_ credit: String) -> Set<String> {
+        let folded = credit.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        let separated = folded.replacingOccurrences(of: "\\s*(,|&|\\+|/|\\bfeat\\.?|\\bft\\.?|\\bfeaturing\\b|\\bwith\\b|\\band\\b|\\bx\\b)\\s*", with: "|", options: .regularExpression)
+        return Set(separated.split(separator: "|").map { name in
+            var n = name.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            if n.hasPrefix("the ") { n.removeFirst(4) }
+            return n
+        }.filter { !$0.isEmpty })
+    }
+
+    /// True when two credits share an artist, so "Silk Sonic, Bruno Mars & Anderson .Paak" matches
+    /// "Bruno Mars, Anderson .Paak & Silk Sonic", and "Kanye West" matches "Kanye West & Jay-Z".
+    static func artistsMatch(_ a: String, _ b: String) -> Bool {
+        let x = a.lowercased(), y = b.lowercased()
+        if x.contains(y) || y.contains(x) { return true }
+        return !artistNames(a).isDisjoint(with: artistNames(b))
     }
 
     /// Strips edition suffixes so "Graduation (Deluxe) - Single" style names still match.
