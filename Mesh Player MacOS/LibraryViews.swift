@@ -517,7 +517,7 @@ private struct TitleCell: View {
         HStack(spacing: 8) {
             ZStack {
                 if isCurrent {
-                    AnimatedEQView(color: theme.accent, isPlaying: engine.isPlaying)
+                    AnimatedEQView(color: theme.accent, isPlaying: engine.isPlaying, height: 11 * zoom)
                 }
             }
             .frame(width: 14 * zoom)
@@ -628,28 +628,35 @@ struct ArtworkBackdrop: View {
     }
 }
 
+/// Apple Music's now playing bars. Drawn from a clock rather than a repeating SwiftUI
+/// animation: a repeating animation also animates the bars' position, so while a page slid in
+/// they bounced around outside their row.
 struct AnimatedEQView: View {
     let color: Color
     let isPlaying: Bool
+    var height: CGFloat = 12
 
-    @State private var phase: Bool = false
+    private static let bars: [(speed: Double, offset: Double)] = [(5.1, 0.0), (6.7, 1.7), (4.3, 3.1), (5.9, 4.6)]
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 1.5) {
-            bar(high: 11, low: 3, duration: 0.42, delay: 0)
-            bar(high: 5, low: 11, duration: 0.5, delay: 0.1)
-            bar(high: 9, low: 4, duration: 0.46, delay: 0.05)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !isPlaying)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            Canvas { canvas, size in
+                let count = Self.bars.count
+                let gap = size.width * 0.12
+                let width = (size.width - gap * CGFloat(count - 1)) / CGFloat(count)
+                for (i, bar) in Self.bars.enumerated() {
+                    // Two waves per bar, so the pattern doesn't visibly repeat.
+                    let wave = isPlaying ? (sin(t * bar.speed + bar.offset) + sin(t * bar.speed * 0.53 + bar.offset * 2)) / 4 + 0.5 : 0
+                    let level = isPlaying ? 0.25 + 0.75 * wave : [0.45, 0.8, 0.6, 0.35][i]
+                    let h = max(width, size.height * level)
+                    let rect = CGRect(x: CGFloat(i) * (width + gap), y: size.height - h, width: width, height: h)
+                    canvas.fill(Path(roundedRect: rect, cornerRadius: width / 2), with: .color(color))
+                }
+            }
         }
-        .frame(width: 12, height: 11, alignment: .bottom)
-        .onAppear { phase = isPlaying }
-        .onChange(of: isPlaying) { _, playing in phase = playing }
-    }
-
-    private func bar(high: CGFloat, low: CGFloat, duration: Double, delay: Double) -> some View {
-        RoundedRectangle(cornerRadius: 1)
-            .fill(color)
-            .frame(width: 2.5, height: isPlaying ? (phase ? high : low) : 3)
-            .animation(isPlaying ? .easeInOut(duration: duration).repeatForever(autoreverses: true).delay(delay) : .default, value: phase)
+        .frame(width: height * 1.1, height: height)
+        .accessibilityHidden(true)
     }
 }
 
@@ -1184,6 +1191,7 @@ private struct AlbumTrackRow: View {
 
     var body: some View {
         let isCurrent = engine.currentTrack?.id == track.id
+        let ink = theme.accent.contrastingInk
 
         HStack(spacing: 16) {
             ZStack {
@@ -1194,7 +1202,7 @@ private struct AlbumTrackRow: View {
                     }
                     .buttonStyle(.plain)
                 } else if isCurrent {
-                    AnimatedEQView(color: theme.accent, isPlaying: engine.isPlaying)
+                    AnimatedEQView(color: ink, isPlaying: engine.isPlaying, height: 14)
                 } else {
                     Text("\(number)")
                         .font(.system(size: 14, weight: .medium).monospacedDigit())
@@ -1203,21 +1211,23 @@ private struct AlbumTrackRow: View {
             }
             .frame(width: 28, alignment: .trailing)
 
+            // The playing song's row is filled with the accent colour and its text turns white,
+            // like Apple Music.
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(track.title)
                         .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
-                        .foregroundStyle(isCurrent ? theme.accent : theme.textPrimary)
+                        .foregroundStyle(isCurrent ? ink : theme.textPrimary)
                         .lineLimit(1)
                     if isExplicit || track.isExplicit == true {
-                        ExplicitBadge(size: 11, color: theme.textTertiary)
+                        ExplicitBadge(size: 11, color: isCurrent ? ink.opacity(0.75) : theme.textTertiary)
                     }
                     if track.isAtmos {
-                        DolbyAtmosBadge(color: theme.textSecondary, scale: 1, showText: false)
+                        DolbyAtmosBadge(color: isCurrent ? ink.opacity(0.85) : theme.textSecondary, scale: 1, showText: false)
                     }
                 }
                 if showArtist {
-                    LinkText(text: track.artist, font: .system(size: 13), color: theme.textSecondary, hoverColor: theme.accent, action: onShowArtist)
+                    LinkText(text: track.artist, font: .system(size: 13), color: isCurrent ? ink.opacity(0.8) : theme.textSecondary, hoverColor: isCurrent ? ink : theme.accent, action: onShowArtist)
                 }
             }
 
@@ -1226,14 +1236,14 @@ private struct AlbumTrackRow: View {
             Button(action: onToggleFavorite) {
                 Image(systemName: track.isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(track.isFavorite ? theme.accent : theme.textSecondary)
+                    .foregroundStyle(isCurrent ? ink : (track.isFavorite ? theme.accent : theme.textSecondary))
             }
             .buttonStyle(.plain)
             .opacity(track.isFavorite || hovering ? 1 : 0)
 
             Text(Fmt.time(track.duration))
                 .font(.system(size: 14).monospacedDigit())
-                .foregroundStyle(theme.textSecondary)
+                .foregroundStyle(isCurrent ? ink.opacity(0.85) : theme.textSecondary)
                 .frame(width: 50, alignment: .trailing)
 
             Menu {
@@ -1255,7 +1265,7 @@ private struct AlbumTrackRow: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(theme.textSecondary)
+                    .foregroundStyle(isCurrent ? ink : theme.textSecondary)
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
@@ -1268,7 +1278,7 @@ private struct AlbumTrackRow: View {
         .frame(height: showArtist ? 58 : 50)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isCurrent ? theme.accent.opacity(0.1) : (hovering ? theme.hover : .clear))
+                .fill(isCurrent ? theme.accent : (hovering ? theme.hover : .clear))
         )
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.hairline).frame(height: 1).padding(.leading, 56).opacity(hovering || isCurrent ? 0 : 1)

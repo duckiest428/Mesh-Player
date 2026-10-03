@@ -482,3 +482,14 @@ struct EmptyLibraryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+extension Color {
+    /// White or black, whichever reads better on this colour (for text on an accent fill).
+    var contrastingInk: Color {
+        guard let rgb = NSColor(self).usingColorSpace(.sRGB) else { return .white }
+        func linear(_ c: CGFloat) -> CGFloat { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let luminance = 0.2126 * linear(rgb.redComponent) + 0.7152 * linear(rgb.greenComponent) + 0.0722 * linear(rgb.blueComponent)
+        // Contrast with white beats contrast with black below about 0.18 luminance; lean white.
+        return luminance > 0.4 ? .black : .white
+    }
+}
