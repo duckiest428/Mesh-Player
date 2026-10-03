@@ -44,9 +44,20 @@ struct AudioQualityPopup: View {
     var body: some View {
         VStack(spacing: 8) {
             // 1. Audio Format
-            Text(track.isAtmos ? "Dolby Atmos" : track.format)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(.white)
+            if track.isAtmos {
+                QualityLogoImage(logo: .dolbyAtmosStacked, height: 34)
+                    .foregroundStyle(.white)
+                    .padding(.bottom, 2)
+            } else {
+                if track.format.localizedCaseInsensitiveContains("lossless") {
+                    QualityLogoImage(logo: .lossless, height: 22)
+                        .foregroundStyle(.white)
+                        .padding(.bottom, 2)
+                }
+                Text(track.format)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.white)
+            }
             
             // 2. Audio format notes
             Text(track.isAtmos ? "Spatial Audio with Dolby Atmos" : (track.format.localizedCaseInsensitiveContains("lossless") ? "Apple Lossless Audio Codec" : (track.format.hasPrefix("MP3") ? "MPEG-1 Audio Layer III" : "Advanced Audio Coding")))
@@ -138,7 +149,7 @@ struct AudioQualityTagsView: View {
                     DolbyAtmosBadge(color: theme.textSecondary, scale: 0.8, showText: true)
                 } else if track.format.localizedCaseInsensitiveContains("lossless") {
                     HStack(spacing: 3) {
-                        Image(systemName: "waveform").font(.system(size: 8.5, weight: .bold))
+                        QualityLogoImage(logo: .lossless, height: 8)
                         Text(track.format.localizedCaseInsensitiveContains("hi-res") ? "Hi-Res Lossless" : "Lossless")
                             .font(.system(size: 9.5, weight: .bold))
                     }

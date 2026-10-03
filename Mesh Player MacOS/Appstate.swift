@@ -1678,41 +1678,19 @@ struct InstrumentalBreakDots: View {
 struct DolbyAtmosBadge: View {
     var color: Color = .white
     var scale: CGFloat = 1.0
+    /// true: the "Dolby Atmos" wordmark in a tag; false: just the double-D icon (for song rows).
     var showText: Bool = true
 
     var body: some View {
-        HStack(spacing: 5 * scale) {
-            HStack(spacing: 1.5 * scale) {
-                Path { path in
-                    path.move(to: CGPoint(x: 0, y: 0))
-                    path.addArc(center: CGPoint(x: 0, y: 4 * scale), radius: 4 * scale, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
-                    path.addLine(to: CGPoint(x: 0, y: 0))
-                    path.closeSubpath()
-                }
-                .fill(color)
-                .frame(width: 4 * scale, height: 8 * scale)
-
-                Path { path in
-                    path.move(to: CGPoint(x: 4 * scale, y: 0))
-                    path.addArc(center: CGPoint(x: 4 * scale, y: 4 * scale), radius: 4 * scale, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
-                    path.addLine(to: CGPoint(x: 4 * scale, y: 0))
-                    path.closeSubpath()
-                }
-                .fill(color)
-                .frame(width: 4 * scale, height: 8 * scale)
-            }
-            .frame(width: 9 * scale, height: 8 * scale)
-
-            if showText {
-                Text("ATMOS")
-                    .font(.system(size: 8.5 * scale, weight: .black, design: .default))
-                    .tracking(1.5 * scale)
-                    .foregroundColor(color)
-            }
+        if showText {
+            QualityLogoImage(logo: .dolbyAtmos, height: 8.5 * scale)
+                .foregroundStyle(color)
+                .padding(.horizontal, 6 * scale)
+                .padding(.vertical, 3.5 * scale)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4 * scale))
+        } else {
+            QualityLogoImage(logo: .dolbyIcon, height: 11 * scale)
+                .foregroundStyle(color)
         }
-        .padding(.horizontal, 6 * scale)
-        .padding(.vertical, 3 * scale)
-        .background(color.opacity(0.12))
-        .cornerRadius(4 * scale)
     }
 }

@@ -200,7 +200,7 @@ struct SongRow: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     if song.info.isAtmos {
-                        Image(systemName: "spatial.audio.fill").font(.caption2).foregroundStyle(.secondary)
+                        QualityLogoImage(logo: .dolbyIcon, height: 10).foregroundStyle(.secondary)
                     }
                 }
                 Text(subtitle ?? song.artist)
@@ -329,9 +329,18 @@ struct QualityBadge: View {
     let label: String
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: label == "Dolby Atmos" ? "spatial.audio.fill" : "waveform")
-            Text(label)
+        Group {
+            if label == "Dolby Atmos" {
+                QualityLogoImage(logo: .dolbyAtmos, height: 9)
+                    .padding(.vertical, 1.5)
+            } else {
+                HStack(spacing: 4) {
+                    if label.localizedCaseInsensitiveContains("lossless") {
+                        QualityLogoImage(logo: .lossless, height: 8)
+                    }
+                    Text(label)
+                }
+            }
         }
         .font(.caption2.weight(.semibold))
         .padding(.horizontal, 8)

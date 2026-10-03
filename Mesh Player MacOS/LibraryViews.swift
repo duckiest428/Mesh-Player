@@ -562,7 +562,7 @@ struct FormatBadge: View {
             DolbyAtmosBadge(color: theme.textSecondary, scale: 0.62 * zoom, showText: true)
         } else if track.format.localizedCaseInsensitiveContains("lossless") {
             HStack(spacing: 3) {
-                Image(systemName: "waveform").font(.system(size: 9 * zoom, weight: .bold))
+                QualityLogoImage(logo: .lossless, height: 8 * zoom)
                 Text(track.format.localizedCaseInsensitiveContains("hi-res") ? "Hi-Res" : "Lossless")
                     .font(.system(size: 10.5 * zoom, weight: .semibold))
             }
