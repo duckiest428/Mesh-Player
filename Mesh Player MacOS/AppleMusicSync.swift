@@ -36,6 +36,9 @@ final class AppleMusicSync: ObservableObject {
         var toLove: [LocalTrack] = []
         var includeSongs = true
         var includeLoves = true
+        /// Songs unticked in the review sheet: not added to Music / not marked as loved.
+        var skippedAdds: Set<UUID> = []
+        var skippedLoves: Set<UUID> = []
         /// Mesh track id → Music persistent ID (hex) for songs Music already has.
         var knownIDs: [UUID: String] = [:]
         var error: String?
@@ -166,6 +169,8 @@ final class AppleMusicSync: ObservableObject {
 
     func apply() {
         guard var plan, let state, !isApplying else { return }
+        plan.songsToAdd.removeAll { plan.skippedAdds.contains($0.id) }
+        plan.toLove.removeAll { plan.skippedLoves.contains($0.id) }
         isApplying = true
         progress = 0
         resultText = nil
@@ -445,12 +450,12 @@ struct AppleMusicSyncSheet: View {
                         .foregroundStyle(theme.textSecondary)
                 }
                 if !plan.songsToAdd.isEmpty {
+                    let chosen = plan.songsToAdd.count - plan.skippedAdds.count
                     Toggle(isOn: binding(\.includeSongs)) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Add \(Fmt.songs(plan.songsToAdd.count)) to the Music library")
-                            Text(plan.songsToAdd.prefix(3).map { "\($0.title) — \($0.artist)" }.joined(separator: ", ") + (plan.songsToAdd.count > 3 ? "…" : ""))
-                                .font(.system(size: 11)).foregroundStyle(theme.textTertiary).lineLimit(1)
-                        }
+                        Text("Add \(Fmt.songs(chosen)) to the Music library")
+                    }
+                    if plan.includeSongs {
+                        songPicker(plan.songsToAdd, skipped: \.skippedAdds)
                     }
                 }
                 if !plan.playlists.isEmpty {
@@ -473,14 +478,56 @@ struct AppleMusicSyncSheet: View {
                         .font(.system(size: 11)).foregroundStyle(theme.textTertiary).fixedSize(horizontal: false, vertical: true)
                 }
                 if !plan.toLove.isEmpty {
-                    Toggle("Mark \(Fmt.songs(plan.toLove.count)) from your Favorites as loved", isOn: binding(\.includeLoves))
+                    Toggle("Mark \(Fmt.songs(plan.toLove.count - plan.skippedLoves.count)) from your Favorites as loved", isOn: binding(\.includeLoves))
+                    if plan.includeLoves {
+                        songPicker(plan.toLove, skipped: \.skippedLoves)
+                    }
                 }
             }
             .toggleStyle(.checkbox)
             .font(.system(size: 13))
             .padding(20)
         }
-        .frame(height: 320)
+        .frame(height: 440)
+    }
+
+    /// A ticked list of songs, so you can leave some out.
+    private func songPicker(_ songs: [LocalTrack], skipped: WritableKeyPath<AppleMusicSync.Plan, Set<UUID>>) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) {
+                    Button("Select All") { sync.plan?[keyPath: skipped] = [] }
+                    Button("Select None") { sync.plan?[keyPath: skipped] = Set(songs.map(\.id)) }
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 11.5))
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(songs) { track in
+                        Toggle(isOn: Binding(
+                            get: { !(sync.plan?[keyPath: skipped].contains(track.id) ?? false) },
+                            set: { on in
+                                if on { sync.plan?[keyPath: skipped].remove(track.id) } else { sync.plan?[keyPath: skipped].insert(track.id) }
+                            }
+                        )) {
+                            HStack(spacing: 4) {
+                                Text(track.title).lineLimit(1)
+                                Text("— \(track.artist) · \(track.album)")
+                                    .foregroundStyle(theme.textTertiary)
+                                    .lineLimit(1)
+                            }
+                            .font(.system(size: 12))
+                        }
+                    }
+                }
+            }
+            .padding(.leading, 4)
+            .padding(.top, 4)
+        } label: {
+            Text("Choose songs (\(songs.count - (sync.plan?[keyPath: skipped].count ?? 0)) of \(songs.count))")
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.textSecondary)
+        }
+        .padding(.leading, 20)
     }
 
     private func binding(_ keyPath: WritableKeyPath<AppleMusicSync.Plan, Bool>) -> Binding<Bool> {
