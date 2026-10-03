@@ -50,8 +50,9 @@ class AudioEngineManager: ObservableObject {
     // Hardware Routing
     @Published var availableOutputs: [SwiftOutputDevice] = []
     @Published var activeOutputId: String = ""
+    /// The device macOS's sound output is set to.
+    @Published var systemOutput: SwiftOutputDevice?
     
-    private var routeDetector: AVRouteDetector?
     
 #if os(macOS)
     func triggerHaptic(pattern: NSHapticFeedbackManager.FeedbackPattern = .generic) {
@@ -66,6 +67,8 @@ class AudioEngineManager: ObservableObject {
     
     // Core Change: Replaced AVAudioPlayer with AVPlayer for system spatial routing
     private var player: AVPlayer?
+    /// For the AirPlay picker, which routes this player.
+    var avPlayer: AVPlayer? { player }
 
     /// The exact playback position, read straight from the player (the published time only
     /// updates a few times a second). For per-frame animations such as the lyrics' break dots.
@@ -86,72 +89,48 @@ class AudioEngineManager: ObservableObject {
         setupRemoteCommandCenter()
     }
     
+    private var deviceObserver: AnyObject?
+
     private func setupDeviceRouting() {
-        if #available(macOS 10.13, *) {
-            routeDetector = AVRouteDetector()
-            routeDetector?.isRouteDetectionEnabled = true
-            NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange), name: .AVRouteDetectorMultipleRoutesDetectedDidChange, object: nil)
+        activeOutputId = UserDefaults.standard.string(forKey: "audioOutputDevice") ?? AudioDevices.systemID
+        deviceObserver = AudioDevices.observe { [weak self] in
+            MainActor.assumeIsolated { self?.refreshAvailableDevices() }
         }
-        
-        #if os(iOS) || targetEnvironment(macCatalyst)
-        NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange), name: AVAudioSession.routeChangeNotification, object: nil)
-        #endif
         refreshAvailableDevices()
     }
-    
-    @objc private func handleRouteChange(notification: Notification) {
-        DispatchQueue.main.async {
-            self.refreshAvailableDevices()
-        }
-    }
-    
+
+    /// The Mac's output devices, and what "System Output" currently means.
     func refreshAvailableDevices() {
-        #if os(iOS) || targetEnvironment(macCatalyst)
-        let session = AVAudioSession.sharedInstance()
-        var devices: [SwiftOutputDevice] = []
-        
-        // Add current route
-        let currentRoute = session.currentRoute
-        for output in currentRoute.outputs {
-            devices.append(SwiftOutputDevice(id: output.uid, name: output.portName, type: output.portType.rawValue, hasAtmos: true, model: "CoreAudio Route"))
-            if self.activeOutputId.isEmpty {
-                self.activeOutputId = output.uid
-            }
+        availableOutputs = AudioDevices.outputs()
+        systemOutput = AudioDevices.defaultOutput()
+        // A chosen device that went away (AirPods put back in their case): follow macOS again
+        // until it comes back.
+        if activeOutputId != AudioDevices.systemID && !availableOutputs.contains(where: { $0.id == activeOutputId }) {
+            player?.audioOutputDeviceUniqueID = nil
+        } else {
+            applyOutputDevice()
         }
-        self.availableOutputs = devices
-        #else
-        // Mock fallback for native macOS without AVFAudio/CoreAudio complex bridging in this file
-        var devices = [
-            SwiftOutputDevice(id: "built-in", name: "System Default", type: "built-in", hasAtmos: true, model: "CoreAudio Route")
-        ]
-        
-        if #available(macOS 10.13, *), let detector = routeDetector, detector.multipleRoutesDetected {
-            devices.append(SwiftOutputDevice(id: "airpods-pro", name: "AirPods Pro", type: "bluetooth", hasAtmos: true, model: "AirPods"))
-        }
-        
-        self.availableOutputs = devices
-        if self.activeOutputId.isEmpty || !devices.contains(where: { $0.id == self.activeOutputId }) {
-            self.activeOutputId = "built-in"
-        }
-        #endif
     }
-    
+
+    /// Plays through `id`, or wherever macOS's sound output is set for `AudioDevices.systemID`.
     func setOutputDevice(id: String) {
-        self.activeOutputId = id
-        // Correctly connects the selected output to the audio engine and updates the routing via CoreAudio.
-        #if os(macOS)
-        if #available(macOS 10.15, *) {
-            // macOS AVPlayer custom output device routing
-            if id != "built-in" {
-                player?.audioOutputDeviceUniqueID = id
-            } else {
-                player?.audioOutputDeviceUniqueID = nil
-            }
-        }
+        activeOutputId = id
+        UserDefaults.standard.set(id, forKey: "audioOutputDevice")
+        applyOutputDevice()
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
-        #endif
     }
-    
+
+    /// The device sound is actually going to right now.
+    var currentOutput: SwiftOutputDevice? {
+        if activeOutputId != AudioDevices.systemID, let chosen = availableOutputs.first(where: { $0.id == activeOutputId }) { return chosen }
+        return systemOutput
+    }
+
+    private func applyOutputDevice() {
+        let uid = activeOutputId == AudioDevices.systemID ? nil : activeOutputId
+        if player?.audioOutputDeviceUniqueID != uid { player?.audioOutputDeviceUniqueID = uid }
+    }
+
     /// The media keys (F7, F8, F9), AirPods and headphone controls, Control Center and the
     /// Touch Bar all arrive here. macOS sends them to whichever app last said it's playing, so
     /// `updateNowPlayingInfo` keeps telling it.
@@ -275,6 +254,9 @@ class AudioEngineManager: ObservableObject {
         playerItem.allowedAudioSpatializationFormats = !renderAtmos ? [] : (spatializeStereo ? .monoStereoAndMultichannel : .multichannel)
 
         let player = AVPlayer(playerItem: playerItem)
+        if activeOutputId != AudioDevices.systemID && availableOutputs.contains(where: { $0.id == activeOutputId }) {
+            player.audioOutputDeviceUniqueID = activeOutputId
+        }
         player.volume = volume
         self.player = player
 

@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import Combine
 import CoreAudio
 import SwiftUI
@@ -1991,8 +1992,6 @@ struct OutputDeviceSidebarView: View {
     @ObservedObject var engine: AudioEngineManager
     var isFullscreen: Bool = false
 
-    @State private var connectingDeviceId: String? = nil
-
     var body: some View {
         let theme = isFullscreen ? ThemeCatalog.theme(named: "True Black") : state.theme
 
@@ -2002,52 +2001,42 @@ struct OutputDeviceSidebarView: View {
             })
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(engine.availableOutputs) { device in
-                        deviceRow(device, theme: theme)
-                    }
+                VStack(alignment: .leading, spacing: 18) {
+                    nowPlayingCard(theme)
+                    volumeCard(theme)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Volume")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(theme.textSecondary)
-                        HStack(spacing: 8) {
-                            Image(systemName: "speaker.fill").font(.system(size: 10)).foregroundStyle(theme.textTertiary)
-                            ThinSlider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), theme: theme)
-                                .frame(height: 16)
-                            Image(systemName: "speaker.wave.3.fill").font(.system(size: 10)).foregroundStyle(theme.textTertiary)
-                        }
-                    }
-                    .padding(12)
-                    .card(theme, radius: 10)
-                    .padding(.top, 8)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Spatial Audio")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(theme.textSecondary)
-                            Spacer()
-                            if engine.isAtmosTrack {
-                                DolbyAtmosBadge(color: theme.textSecondary, scale: 0.9)
+                    section("Speakers & Headphones", theme) {
+                        VStack(spacing: 2) {
+                            systemRow(theme)
+                            ForEach(engine.availableOutputs) { device in
+                                deviceRow(device, theme: theme)
                             }
                         }
-                        Picker("", selection: $state.spatialAudioActive) {
-                            Text("Stereo").tag(false)
-                            Text("Spatialize").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        Text(state.spatialAudioActive ? "Multichannel sources are rendered with head-tracked spatial audio on supported headphones." : "Audio is played as-is in stereo.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(theme.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(12)
-                    .card(theme, radius: 10)
+
+                    section("AirPlay", theme) {
+                        HStack(spacing: 12) {
+                            AirPlayRouteButton(player: engine.avPlayer, tint: theme.textPrimary)
+                                .frame(width: 34, height: 34)
+                                .background(theme.hover, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("AirPlay Speakers & TVs")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(theme.textPrimary)
+                                Text("Click the icon to pick a HomePod, Apple TV or AirPlay speaker.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.textTertiary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(10)
+                    }
+
+                    spatialCard(theme)
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 14)
+                .padding(.top, 4)
+                .padding(.bottom, 18)
             }
         }
         .frame(width: isFullscreen ? 420 : 300)
@@ -2058,55 +2047,219 @@ struct OutputDeviceSidebarView: View {
                 theme.sidebarBackground
             }
         }
+        .onAppear { engine.refreshAvailableDevices() }
+    }
+
+    // MARK: Cards
+
+    /// Where the music is going right now, and what's playing, like Control Center's sound tile.
+    private func nowPlayingCard(_ theme: ThemeColor) -> some View {
+        let output = engine.currentOutput
+        return VStack(spacing: 12) {
+            Image(systemName: output.map(Self.symbol(for:)) ?? "speaker.wave.2.fill")
+                .font(.system(size: 30, weight: .regular))
+                .foregroundStyle(theme.accent.contrastingInk)
+                .frame(width: 66, height: 66)
+                .background(theme.accent, in: Circle())
+                .contentTransition(.symbolEffect(.replace))
+            VStack(spacing: 3) {
+                Text(output?.name ?? "Mac Speakers")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(theme.textPrimary)
+                    .multilineTextAlignment(.center)
+                Text(engine.activeOutputId == AudioDevices.systemID ? "Following your Mac's sound output" : (output?.model ?? ""))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.textTertiary)
+            }
+            if let track = engine.currentTrack {
+                AudioQualityTagsView(track: track, theme: theme)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18)
+        .padding(.horizontal, 12)
+        .card(theme, radius: 14)
+        .animation(.easeInOut(duration: 0.25), value: output?.id)
+    }
+
+    private func volumeCard(_ theme: ThemeColor) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Volume")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(theme.textSecondary)
+                Spacer()
+                Text("\(Int((engine.volume * 100).rounded()))%")
+                    .font(.system(size: 11.5, weight: .medium).monospacedDigit())
+                    .foregroundStyle(theme.textTertiary)
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "speaker.fill").font(.system(size: 11)).foregroundStyle(theme.textTertiary)
+                ThinSlider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), theme: theme, thickness: 6)
+                    .frame(height: 18)
+                Image(systemName: "speaker.wave.3.fill").font(.system(size: 11)).foregroundStyle(theme.textTertiary)
+            }
+        }
+        .padding(14)
+        .card(theme, radius: 12)
+    }
+
+    private func spatialCard(_ theme: ThemeColor) -> some View {
+        let supported = engine.currentOutput?.hasAtmos ?? false
+        return section("Spatial Audio", theme, trailing: engine.isAtmosTrack ? AnyView(DolbyAtmosBadge(color: theme.textSecondary, scale: 0.9)) : nil) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("", selection: $state.spatialAudioActive) {
+                    Text("Off").tag(false)
+                    Text("Spatialize Stereo").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(!state.enableAtmos)
+                Label {
+                    Text(spatialNote(supported: supported))
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: supported ? "checkmark.circle.fill" : "info.circle")
+                        .foregroundStyle(supported ? theme.accent : theme.textTertiary)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(theme.textTertiary)
+            }
+            .padding(12)
+        }
+    }
+
+    private func spatialNote(supported: Bool) -> String {
+        if !state.enableAtmos { return "Turned off in Settings › Playback." }
+        let name = engine.currentOutput?.name ?? "This output"
+        if supported {
+            return engine.isAtmosTrack
+                ? "Playing in Dolby Atmos on \(name)."
+                : (state.spatialAudioActive ? "Stereo songs are spatialized on \(name)." : "Dolby Atmos songs play in spatial audio on \(name).")
+        }
+        return "\(name) plays Dolby Atmos songs as a stereo mix. Spatial audio needs AirPods, Beats or a multichannel speaker setup."
+    }
+
+    // MARK: Rows
+
+    private func section<Content: View>(_ title: String, _ theme: ThemeColor, trailing: AnyView? = nil, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(theme.textSecondary)
+                Spacer()
+                trailing
+            }
+            .padding(.horizontal, 4)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .card(theme, radius: 12)
+        }
+    }
+
+    private func systemRow(_ theme: ThemeColor) -> some View {
+        row(id: AudioDevices.systemID,
+            symbol: "gearshape.fill",
+            name: "System Output",
+            detail: engine.systemOutput.map { "Now: \($0.name)" } ?? "Follows your Mac's Sound settings",
+            theme: theme)
     }
 
     private func deviceRow(_ device: SwiftOutputDevice, theme: ThemeColor) -> some View {
-        let isActive = device.id == engine.activeOutputId
-        let isConnecting = device.id == connectingDeviceId
-
-        return Button {
-            guard device.id != engine.activeOutputId, connectingDeviceId == nil else { return }
-            connectingDeviceId = device.id
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                engine.setOutputDevice(id: device.id)
-                connectingDeviceId = nil
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: iconName(for: device.type))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isActive ? theme.onAccent : theme.textPrimary)
-                    .frame(width: 34, height: 34)
-                    .background(isActive ? theme.accent : theme.hover, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(device.name)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                    Text(device.model)
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.textTertiary)
-                }
-                Spacer()
-                if isConnecting {
-                    ProgressView().controlSize(.small)
-                } else if isActive {
-                    Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(theme.accent)
-                }
-            }
-            .padding(10)
-            .background(isActive ? theme.accent.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        row(id: device.id, symbol: Self.symbol(for: device), name: device.name, detail: device.model, theme: theme)
     }
 
-    private func iconName(for type: String) -> String {
-        switch type {
-        case "built-in": return "laptopcomputer"
-        case "headphones": return "airpodspro"
-        case "airplay": return "tv.and.mediabox"
+    private func row(id: String, symbol: String, name: String, detail: String, theme: ThemeColor) -> some View {
+        let isActive = engine.activeOutputId == id
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { engine.setOutputDevice(id: id) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isActive ? theme.accent.contrastingInk : theme.textPrimary)
+                    .frame(width: 34, height: 34)
+                    .background(isActive ? theme.accent : theme.hover, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.textTertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(theme.accent)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(OutputRowStyle(theme: theme))
+    }
+
+    /// The SF Symbol for a device, down to the AirPods model.
+    static func symbol(for device: SwiftOutputDevice) -> String {
+        let name = device.name.lowercased()
+        if name.contains("airpods max") { return "airpodsmax" }
+        if name.contains("airpods pro") { return "airpodspro" }
+        if name.contains("airpods") { return "airpods" }
+        if name.contains("beats") { return "beats.headphones" }
+        if name.contains("homepod") { return "homepod.fill" }
+        if name.contains("apple tv") { return "appletv.fill" }
+        switch device.type {
+        case "built-in": return name.contains("macbook") ? "laptopcomputer" : "desktopcomputer"
+        case "wired-headphones", "bluetooth": return "headphones"
+        case "airplay": return "airplayaudio"
+        case "display": return "tv"
+        case "virtual": return "waveform"
         default: return "hifispeaker.fill"
         }
+    }
+}
+
+private struct OutputRowStyle: ButtonStyle {
+    let theme: ThemeColor
+    func makeBody(configuration: Configuration) -> some View {
+        StyleBody(configuration: configuration, theme: theme)
+    }
+
+    private struct StyleBody: View {
+        let configuration: Configuration
+        let theme: ThemeColor
+        @State private var hovering = false
+        var body: some View {
+            configuration.label
+                .background(hovering || configuration.isPressed ? theme.hover : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .scaleEffect(configuration.isPressed ? 0.98 : 1)
+                .padding(3)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// macOS's AirPlay picker, routing the player to the chosen speaker or TV.
+struct AirPlayRouteButton: NSViewRepresentable {
+    let player: AVPlayer?
+    let tint: Color
+
+    func makeNSView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.isRoutePickerButtonBordered = false
+        return view
+    }
+
+    func updateNSView(_ view: AVRoutePickerView, context: Context) {
+        view.player = player
+        view.setRoutePickerButtonColor(NSColor(tint), for: .normal)
+        view.setRoutePickerButtonColor(NSColor(tint), for: .active)
     }
 }
