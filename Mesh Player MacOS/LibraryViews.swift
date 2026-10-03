@@ -694,18 +694,109 @@ struct AlbumDetailView: View {
     @State private var catalog: CatalogAlbumInfo?
     @State private var showFullNotes = false
     @State private var pageWidth: CGFloat = 1000
+    /// Also list the album's songs that aren't in the library (from Apple Music), greyed out.
+    @AppStorage("showCompleteAlbums") private var showCompleteAlbum = false
+    @ObservedObject private var downloader = AmdlDownloader.shared
+    @Environment(\.pageTopInset) private var topInset
 
     private var albumTracks: [LocalTrack] { state.albumTracks(named: albumName) }
+
+    /// A row in the track list: a song you have, or one only on Apple Music.
+    private enum Row: Identifiable {
+        case local(LocalTrack, CatalogTrackInfo?)
+        case missing(CatalogTrackInfo)
+        var id: String {
+            switch self {
+            case .local(let track, _): return track.id.uuidString
+            case .missing(let item): return "am-" + item.id
+            }
+        }
+        var disc: Int {
+            switch self {
+            case .local(let track, _): return track.discNumber
+            case .missing(let item): return item.discNumber ?? 1
+            }
+        }
+    }
+
+    /// Pairs local songs with the album's Apple Music tracks: by title first (ignoring case,
+    /// accents and "(feat. …)" parts), then by disc and track number.
+    static func matchCatalog(_ tracks: [LocalTrack], _ catalog: [CatalogTrackInfo]) -> [UUID: CatalogTrackInfo] {
+        func key(_ title: String) -> String {
+            title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .replacingOccurrences(of: "\\s*[\\(\\[][^\\)\\]]*[\\)\\]]", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+        }
+        var result: [UUID: CatalogTrackInfo] = [:]
+        var used = Set<String>()
+        for track in tracks {
+            let exact = track.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            if let hit = catalog.first(where: { !used.contains($0.id) && $0.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) == exact })
+                ?? catalog.first(where: { !used.contains($0.id) && key($0.name) == key(track.title) && !key(track.title).isEmpty }) {
+                result[track.id] = hit
+                used.insert(hit.id)
+            }
+        }
+        for track in tracks where result[track.id] == nil && track.trackNumber > 0 {
+            if let hit = catalog.first(where: { !used.contains($0.id) && $0.trackNumber == track.trackNumber && ($0.discNumber ?? 1) == track.discNumber }) {
+                result[track.id] = hit
+                used.insert(hit.id)
+            }
+        }
+        return result
+    }
+
+    /// Album / EP / Single from the release itself when it isn't known from Apple Music: the
+    /// highest track number counts (owning 4 songs of a 20-track album doesn't make it an EP).
+    static func releaseKind(title: String, tracks: [LocalTrack]) -> String {
+        if title.hasSuffix(" - Single") { return "Single" }
+        if title.hasSuffix(" - EP") { return "EP" }
+        let count = max(tracks.count, tracks.map(\.trackNumber).max() ?? 0)
+        let total = tracks.reduce(0) { $0 + $1.duration }
+        if count <= 3 && total < 30 * 60 && tracks.allSatisfy({ $0.duration < 10 * 60 }) { return "Single" }
+        if count <= 6 && total < 30 * 60 { return "EP" }
+        return "Album"
+    }
+
+    private func catalogItem(for track: CatalogTrackInfo) -> CatalogItem? {
+        let link = track.url.flatMap(URL.init(string:))
+            ?? catalog?.url.flatMap { URL(string: $0 + "?i=" + track.id) }
+        guard let link else { return nil }
+        return CatalogItem(id: "song-\(track.id)", kind: .song, title: track.name, artist: track.artist, album: title,
+                           artworkURL: catalog?.artworkURL(300), appleMusicURL: link, year: catalog?.year,
+                           trackCount: nil, isExplicit: track.isExplicit)
+    }
+
+    private func job(for track: CatalogTrackInfo) -> AmdlDownloader.Job? {
+        downloader.jobs.first { $0.item.id == "song-\(track.id)" }
+    }
+
+    private func download(_ missing: [CatalogTrackInfo]) {
+        for track in missing {
+            if let item = catalogItem(for: track) { downloader.enqueue(item, state: state) }
+        }
+    }
 
     var body: some View {
         let theme = state.theme
         let tracks = albumTracks
         let rep = tracks.first
         let albumArtist = rep?.albumArtist ?? rep?.artist ?? "Unknown Artist"
-        let isMultiDisc = (tracks.map(\.discNumber).max() ?? 1) > 1
         let totalSeconds = tracks.reduce(0) { $0 + $1.duration }
         let displayName = title.replacingOccurrences(of: " - Single", with: "").replacingOccurrences(of: " - EP", with: "")
-        let kind = title.hasSuffix("Single") || tracks.count <= 2 ? "Single" : (title.hasSuffix("EP") || tracks.count <= 6 ? "EP" : "Album")
+        let kind = catalog?.kind ?? Self.releaseKind(title: title, tracks: tracks)
+        let catalogTracks = catalog?.tracks ?? []
+        let matches = Self.matchCatalog(tracks, catalogTracks)
+        let matchedIds = Set(matches.values.map(\.id))
+        let missing = catalogTracks.filter { !matchedIds.contains($0.id) }
+        let rows: [Row] = {
+            guard showCompleteAlbum, !missing.isEmpty else { return tracks.map { .local($0, matches[$0.id]) } }
+            var byCatalogId: [String: LocalTrack] = [:]
+            for (id, item) in matches { if let t = tracks.first(where: { $0.id == id }) { byCatalogId[item.id] = t } }
+            let ordered: [Row] = catalogTracks.map { item in byCatalogId[item.id].map { .local($0, item) } ?? .missing(item) }
+            return ordered + tracks.filter { matches[$0.id] == nil }.map { .local($0, nil) }
+        }()
+        let isMultiDisc = (rows.map(\.disc).max() ?? 1) > 1
 
         // The header grows with the window, like Apple Music's album pages.
         let art = min(max(pageWidth * 0.27, 260), 380)
@@ -731,10 +822,16 @@ struct AlbumDetailView: View {
 
                     VStack(alignment: .leading, spacing: 9) {
                         Eyebrow(text: kind, color: theme.textSecondary)
-                        Text(displayName)
-                            .font(.system(size: 40, weight: .bold))
-                            .foregroundStyle(theme.textPrimary)
-                            .lineLimit(2)
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(displayName)
+                                .font(.system(size: 40, weight: .bold))
+                                .foregroundStyle(theme.textPrimary)
+                                .lineLimit(2)
+                            if catalog?.isExplicit == true {
+                                ExplicitBadge(size: 22, color: theme.textSecondary)
+                                    .help("Explicit")
+                            }
+                        }
                         LinkText(text: albumArtist, font: .system(size: 24, weight: .semibold), color: theme.accent, hoverColor: theme.accent) {
                             state.showArtist(rep?.artist ?? albumArtist)
                         }
@@ -808,6 +905,11 @@ struct AlbumDetailView: View {
                                         Button(playlist.name) { state.addTracksToPlaylist(tracks, playlistId: playlist.id) }
                                     }
                                 }
+                                if !missing.isEmpty {
+                                    Divider()
+                                    Toggle("Show Complete Album", isOn: $showCompleteAlbum)
+                                    Button("Get \(missing.count) Missing Song\(missing.count == 1 ? "" : "s")…") { download(missing) }
+                                }
                                 Divider()
                                 Button("Show in Finder") {
                                     let urls = tracks.compactMap(\.fileURL)
@@ -829,19 +931,19 @@ struct AlbumDetailView: View {
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 36)
-                .padding(.top, 36)
+                .padding(.top, 36 + topInset)
                 .padding(.bottom, 30)
                 .background(alignment: .top) {
-                    if let rep { ArtworkBackdrop(track: rep, theme: theme, height: art + 180) }
+                    if let rep { ArtworkBackdrop(track: rep, theme: theme, height: art + 180 + topInset) }
                 }
 
                 // Tracks
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                        if isMultiDisc && (index == 0 || tracks[index - 1].discNumber != track.discNumber) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        if isMultiDisc && (index == 0 || rows[index - 1].disc != row.disc) {
                             HStack {
                                 Image(systemName: "opticaldisc").font(.system(size: 13))
-                                Text("Disc \(track.discNumber)").font(.system(size: 14, weight: .bold))
+                                Text("Disc \(row.disc)").font(.system(size: 14, weight: .bold))
                                 Spacer()
                             }
                             .foregroundStyle(theme.textSecondary)
@@ -849,9 +951,17 @@ struct AlbumDetailView: View {
                             .padding(.top, index == 0 ? 0 : 18)
                             .padding(.bottom, 6)
                         }
+                        switch row {
+                        case .missing(let item):
+                            MissingTrackRow(item: item, number: item.trackNumber ?? index + 1, showArtist: item.artist != (catalog?.artist ?? albumArtist),
+                                            theme: theme, job: job(for: item)) {
+                                download([item])
+                            }
+                        case .local(let track, let match):
                         AlbumTrackRow(
                             track: track,
-                            number: track.parsedTrackNumber != 9999 ? track.parsedTrackNumber : index + 1,
+                            number: track.parsedTrackNumber != 9999 ? track.parsedTrackNumber : (match?.trackNumber ?? index + 1),
+                            isExplicit: match?.isExplicit == true,
                             showArtist: track.artist != albumArtist,
                             engine: engine,
                             theme: theme,
@@ -868,15 +978,33 @@ struct AlbumDetailView: View {
                             },
                             onShowArtist: { state.showArtist(track.artist) }
                         )
+                        }
                     }
                 }
                 .padding(.horizontal, 22)
 
+                if !missing.isEmpty {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.25)) { showCompleteAlbum.toggle() }
+                    } label: {
+                        Text(showCompleteAlbum ? "Hide Songs Not in Library" : "Show Complete Album (\(missing.count) more on Apple Music)")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 36)
+                    .padding(.top, 14)
+                }
+
                 // Footer
                 VStack(alignment: .leading, spacing: 4) {
-                    if let date = tracks.map(\.dateAdded).min() {
+                    // Like Apple Music: release date, length, copyright.
+                    if let released = catalog?.releaseDateText {
+                        Text(released)
+                    } else if let date = tracks.map(\.dateAdded).min() {
                         Text("Added \(Fmt.date(date))")
                     }
+                    Text("\(Fmt.songs(tracks.count)), \(Int((totalSeconds / 60).rounded())) minute\(Int((totalSeconds / 60).rounded()) == 1 ? "" : "s")")
                     // Reserve the line while looking it up so the artist name never flashes in first.
                     Text(copyrightText(for: tracks) ?? " ")
                 }
@@ -965,9 +1093,73 @@ struct AlbumDetailView: View {
     }
 }
 
+/// A song from the album that isn't in the library, with a button to get it through am-dl.
+private struct MissingTrackRow: View {
+    let item: CatalogTrackInfo
+    let number: Int
+    let showArtist: Bool
+    let theme: ThemeColor
+    let job: AmdlDownloader.Job?
+    let onGet: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Text("\(number)")
+                .font(.system(size: 14, weight: .medium).monospacedDigit())
+                .foregroundStyle(theme.textTertiary.opacity(0.7))
+                .frame(width: 28, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(item.name)
+                        .font(.system(size: 15))
+                        .foregroundStyle(theme.textTertiary)
+                        .lineLimit(1)
+                    if item.isExplicit {
+                        ExplicitBadge(size: 11, color: theme.textTertiary.opacity(0.7))
+                    }
+                }
+                if showArtist {
+                    Text(item.artist).font(.system(size: 13)).foregroundStyle(theme.textTertiary.opacity(0.8)).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if let job {
+                JobBadge(job: job, theme: theme)
+                    .frame(width: 26, height: 26)
+                    .help(job.isFinished ? "" : "Downloading with am-dl")
+            } else {
+                Button(action: onGet) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(hovering ? theme.accent : theme.textSecondary)
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .help("Get this song with am-dl")
+            }
+            Text(Fmt.time(item.duration))
+                .font(.system(size: 14).monospacedDigit())
+                .foregroundStyle(theme.textTertiary)
+                .frame(width: 50, alignment: .trailing)
+            Color.clear.frame(width: 26)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: showArtist ? 58 : 50)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hovering ? theme.hover.opacity(0.5) : .clear))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.hairline).frame(height: 1).padding(.leading, 56)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help("Not in your library")
+    }
+}
+
 private struct AlbumTrackRow: View {
     let track: LocalTrack
     let number: Int
+    var isExplicit = false
     let showArtist: Bool
     @ObservedObject var engine: AudioEngineManager
     let theme: ThemeColor
@@ -1009,6 +1201,9 @@ private struct AlbumTrackRow: View {
                         .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
                         .foregroundStyle(isCurrent ? theme.accent : theme.textPrimary)
                         .lineLimit(1)
+                    if isExplicit {
+                        ExplicitBadge(size: 11, color: theme.textTertiary)
+                    }
                     if track.isAtmos {
                         DolbyAtmosBadge(color: theme.textSecondary, scale: 0.7, showText: false)
                     }

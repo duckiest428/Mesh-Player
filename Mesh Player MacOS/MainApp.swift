@@ -181,6 +181,17 @@ struct macOSMusicPlayerContentView: View {
     }
 }
 
+private struct PageTopInsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+
+extension EnvironmentValues {
+    /// Extra space a page should leave at its top (for the floating Back button), inside its own
+    /// background so the background still reaches the window's top edge.
+    var pageTopInset: CGFloat {
+        get { self[PageTopInsetKey.self] }
+        set { self[PageTopInsetKey.self] = newValue }
+    }
+}
+
 /// Round chevron that floats over the top left of a drill-down page.
 struct BackButton: View {
     let title: String
@@ -209,15 +220,24 @@ struct BackButton: View {
 struct DetailRouter: View {
     @ObservedObject var state: AppStateManager
     let engine: AudioEngineManager
+    @AppStorage(ContentZoom.key) private var zoom = 1.0
+
+    /// Room left at the top of drill-down pages for the floating Back button.
+    static let backButtonInset: CGFloat = 56
 
     var body: some View {
         let theme = state.theme
         let tab = state.selectedTab ?? "home"
+        let inset = state.activeFilterType != nil ? Self.backButtonInset : 0
+        // Album and artist pages take the room themselves, so their artwork backdrop and banner
+        // still reach the top of the window; other pages are simply pushed down.
+        let pageTakesInset = !(tab == "songs" || tab.hasPrefix("playlist-"))
+            && (state.activeFilterType == "album" || (state.activeFilterType == "artist" && tab != "albums"))
 
         content(tab: tab)
+            .environment(\.pageTopInset, pageTakesInset ? inset / zoom : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Drill-down pages start below the floating Back button.
-            .padding(.top, state.activeFilterType != nil ? 56 : 0)
+            .padding(.top, pageTakesInset ? 0 : inset)
             .background(theme.background)
     }
 

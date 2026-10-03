@@ -176,3 +176,19 @@ struct AudioQualityTagsView: View {
         }
     }
 }
+
+/// Apple Music's "E" for explicit songs and albums.
+struct ExplicitBadge: View {
+    var size: CGFloat = 11
+    var color: Color = .secondary
+
+    var body: some View {
+        Text("E")
+            .font(.system(size: size * 0.72, weight: .bold))
+            .foregroundStyle(.black.opacity(0.85))
+            .frame(width: size, height: size)
+            .background(color, in: RoundedRectangle(cornerRadius: size * 0.2, style: .continuous))
+            .blendMode(.normal)
+            .accessibilityLabel("Explicit")
+    }
+}

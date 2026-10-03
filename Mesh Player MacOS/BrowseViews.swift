@@ -323,6 +323,7 @@ struct ArtistPageView: View {
     let name: String
 
     @State private var catalog: CatalogArtistInfo?
+    @Environment(\.pageTopInset) private var topInset
     @State private var banner: NSImage?
 
     var body: some View {
@@ -440,7 +441,7 @@ struct ArtistPageView: View {
                     theme.cardBackground
                 }
             }
-            .frame(height: 380)
+            .frame(height: 380 + topInset)
             .frame(maxWidth: .infinity)
             .clipped()
 
@@ -488,7 +489,7 @@ struct ArtistPageView: View {
             .padding(.bottom, 26)
             .padding(.horizontal, 28)
         }
-        .frame(height: 380)
+        .frame(height: 380 + topInset)
         .environment(\.colorScheme, .dark)
     }
 
