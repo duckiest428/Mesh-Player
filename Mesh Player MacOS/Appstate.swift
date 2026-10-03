@@ -1706,13 +1706,13 @@ struct DolbyAtmosBadge: View {
 
     var body: some View {
         if showText {
-            QualityLogoImage(logo: .dolbyAtmos, height: 8.5 * scale)
+            QualityLogoImage(logo: .dolbyAtmos, height: 11 * scale)
                 .foregroundStyle(color)
-                .padding(.horizontal, 6 * scale)
-                .padding(.vertical, 3.5 * scale)
-                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4 * scale))
+                .padding(.horizontal, 7 * scale)
+                .padding(.vertical, 4.5 * scale)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5 * scale))
         } else {
-            QualityLogoImage(logo: .dolbyIcon, height: 11 * scale)
+            QualityLogoImage(logo: .dolbyIcon, height: 13 * scale)
                 .foregroundStyle(color)
         }
     }

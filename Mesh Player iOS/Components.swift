@@ -200,7 +200,7 @@ struct SongRow: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     if song.info.isAtmos {
-                        QualityLogoImage(logo: .dolbyIcon, height: 10).foregroundStyle(.secondary)
+                        QualityLogoImage(logo: .dolbyIcon, height: 12).foregroundStyle(.secondary)
                     }
                 }
                 Text(subtitle ?? song.artist)
@@ -331,12 +331,12 @@ struct QualityBadge: View {
     var body: some View {
         Group {
             if label == "Dolby Atmos" {
-                QualityLogoImage(logo: .dolbyAtmos, height: 9)
+                QualityLogoImage(logo: .dolbyAtmos, height: 11)
                     .padding(.vertical, 1.5)
             } else {
                 HStack(spacing: 4) {
                     if label.localizedCaseInsensitiveContains("lossless") {
-                        QualityLogoImage(logo: .lossless, height: 8)
+                        QualityLogoImage(logo: .lossless, height: 10)
                     }
                     Text(label)
                 }

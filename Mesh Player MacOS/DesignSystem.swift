@@ -56,8 +56,10 @@ enum Fmt {
     }
 
     static func longDuration(_ seconds: TimeInterval) -> String {
-        let h = Int(seconds) / 3600
-        let m = (Int(seconds) % 3600) / 60
+        // Rounded like Apple Music, so a 2:50 song reads "3 min" here and in the album footer.
+        let minutes = Int((seconds / 60).rounded())
+        let h = minutes / 60
+        let m = minutes % 60
         if h > 0 { return "\(h) hr \(m) min" }
         return "\(max(m, seconds > 0 ? 1 : 0)) min"
     }

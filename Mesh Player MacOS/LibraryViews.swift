@@ -529,7 +529,7 @@ private struct TitleCell: View {
                 ExplicitBadge(size: 10 * zoom, color: theme.textTertiary)
             }
             if track.isAtmos {
-                DolbyAtmosBadge(color: theme.textSecondary, scale: 0.55 * zoom, showText: false)
+                DolbyAtmosBadge(color: theme.textSecondary, scale: 0.85 * zoom, showText: false)
             }
         }
     }
@@ -562,10 +562,10 @@ struct FormatBadge: View {
 
     var body: some View {
         if track.isAtmos {
-            DolbyAtmosBadge(color: theme.textSecondary, scale: 0.62 * zoom, showText: true)
+            DolbyAtmosBadge(color: theme.textSecondary, scale: 0.85 * zoom, showText: true)
         } else if track.format.localizedCaseInsensitiveContains("lossless") {
             HStack(spacing: 3) {
-                QualityLogoImage(logo: .lossless, height: 8 * zoom)
+                QualityLogoImage(logo: .lossless, height: 10 * zoom)
                 Text(track.format.localizedCaseInsensitiveContains("hi-res") ? "Hi-Res" : "Lossless")
                     .font(.system(size: 10.5 * zoom, weight: .semibold))
             }
@@ -844,7 +844,7 @@ struct AlbumDetailView: View {
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(theme.textSecondary)
                             if let rep {
-                                AudioQualityTagsView(track: rep, theme: theme)
+                                AudioQualityTagsView(track: rep, theme: theme, size: 1.1)
                             }
                         }
                         if let notes = catalog?.notesShort ?? catalog?.notesStandard, !notes.isEmpty {
@@ -1213,7 +1213,7 @@ private struct AlbumTrackRow: View {
                         ExplicitBadge(size: 11, color: theme.textTertiary)
                     }
                     if track.isAtmos {
-                        DolbyAtmosBadge(color: theme.textSecondary, scale: 0.7, showText: false)
+                        DolbyAtmosBadge(color: theme.textSecondary, scale: 1, showText: false)
                     }
                 }
                 if showArtist {
@@ -1895,7 +1895,7 @@ struct OutputDeviceSidebarView: View {
                                 .foregroundStyle(theme.textSecondary)
                             Spacer()
                             if engine.isAtmosTrack {
-                                DolbyAtmosBadge(color: theme.textSecondary, scale: 0.7)
+                                DolbyAtmosBadge(color: theme.textSecondary, scale: 0.9)
                             }
                         }
                         Picker("", selection: $state.spatialAudioActive) {

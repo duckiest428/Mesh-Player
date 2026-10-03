@@ -1130,7 +1130,7 @@ struct FullscreenProgressBar: View {
                 .foregroundStyle(.white.opacity(active ? 0.7 : 0.5))
 
                 if let track = engine.currentTrack {
-                    AudioQualityTagsView(track: track, theme: ThemeCatalog.theme(named: "True Black"))
+                    AudioQualityTagsView(track: track, theme: ThemeCatalog.theme(named: "True Black"), size: labelSize / 11)
                 }
             }
         }

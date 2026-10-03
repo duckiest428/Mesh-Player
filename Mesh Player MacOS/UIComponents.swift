@@ -137,6 +137,8 @@ struct AudioQualityPopup: View {
 struct AudioQualityTagsView: View {
     let track: LocalTrack
     let theme: ThemeColor
+    /// 1 suits 13–14pt text next to it; the full screen player scales it with its time labels.
+    var size: CGFloat = 1
     @State private var showingPopover = false
     @State private var hovering = false
 
@@ -146,24 +148,24 @@ struct AudioQualityTagsView: View {
         } label: {
             Group {
                 if track.isAtmos {
-                    DolbyAtmosBadge(color: theme.textSecondary, scale: 0.8, showText: true)
+                    DolbyAtmosBadge(color: theme.textSecondary, scale: size, showText: true)
                 } else if track.format.localizedCaseInsensitiveContains("lossless") {
-                    HStack(spacing: 3) {
-                        QualityLogoImage(logo: .lossless, height: 8)
+                    HStack(spacing: 4 * size) {
+                        QualityLogoImage(logo: .lossless, height: 11 * size)
                         Text(track.format.localizedCaseInsensitiveContains("hi-res") ? "Hi-Res Lossless" : "Lossless")
-                            .font(.system(size: 9.5, weight: .bold))
+                            .font(.system(size: 12 * size, weight: .bold))
                     }
                     .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(theme.hover, in: RoundedRectangle(cornerRadius: 4))
+                    .padding(.horizontal, 7 * size)
+                    .padding(.vertical, 3.5 * size)
+                    .background(theme.hover, in: RoundedRectangle(cornerRadius: 5 * size))
                 } else {
                     Text(track.format)
-                        .font(.system(size: 9.5, weight: .bold))
+                        .font(.system(size: 12 * size, weight: .bold))
                         .foregroundStyle(theme.textSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(theme.hover, in: RoundedRectangle(cornerRadius: 4))
+                        .padding(.horizontal, 7 * size)
+                        .padding(.vertical, 3.5 * size)
+                        .background(theme.hover, in: RoundedRectangle(cornerRadius: 5 * size))
                 }
             }
             .opacity(hovering ? 1 : 0.85)
