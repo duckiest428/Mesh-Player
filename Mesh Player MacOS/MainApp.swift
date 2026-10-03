@@ -1530,17 +1530,20 @@ struct HomeView: View {
         }
         .background(theme.background)
         .onAppear {
-            if recommendedItems.isEmpty && !state.tracks.isEmpty { generateRecommendations() }
+            if recommendedItems.isEmpty && !state.tracks.isEmpty { loadOrGenerateRecommendations() }
         }
         .task(id: state.isLibraryLoaded) {
             guard state.isLibraryLoaded, onlineFacts.isEmpty else { return }
             let facts = await loadOnlineFacts()
             guard !facts.isEmpty, !Task.isCancelled else { return }
             onlineFacts = facts
-            withAnimation(.easeInOut(duration: 0.25)) { generateRecommendations() }
+            // Picks stay put for an hour; the online facts join the next fresh set.
+            if RecommendationCache.fresh() == nil {
+                withAnimation(.easeInOut(duration: 0.25)) { generateRecommendations() }
+            }
         }
         .onChange(of: state.tracks.count) { _, _ in
-            if recommendedItems.isEmpty && !state.tracks.isEmpty { generateRecommendations() }
+            if recommendedItems.isEmpty && !state.tracks.isEmpty { loadOrGenerateRecommendations() }
         }
     }
 
@@ -1640,6 +1643,19 @@ struct HomeView: View {
             }
             .padding(.bottom, 40)
         }
+    }
+
+    /// Reuses the picks from the last hour (even across launches) when their songs still exist.
+    private func loadOrGenerateRecommendations() {
+        if let saved = RecommendationCache.fresh() {
+            let byId = Dictionary(state.libraryTracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            let items = saved.items.compactMap { entry in byId[entry.id].map { RecommendedTrackItem(track: $0, badgeTag: entry.tag) } }
+            if items.count >= min(6, saved.items.count) {
+                recommendedItems = items
+                return
+            }
+        }
+        generateRecommendations()
     }
 
     /// Picks songs for "From Your Library". Every pick is labelled with the real reason it was
@@ -1747,6 +1763,7 @@ struct HomeView: View {
             }
         }
         recommendedItems = results
+        RecommendationCache.save(results)
     }
 
     /// Track id → "#2 of Kanye West's top songs on Apple Music", for songs in the library that are
@@ -1767,6 +1784,26 @@ struct HomeView: View {
             }
         }
         return facts
+    }
+}
+
+/// "From Your Library" picks are kept for an hour, or until Refresh is pressed.
+enum RecommendationCache {
+    struct Entry: Codable { var id: UUID; var tag: String? }
+    struct Saved: Codable { var date: Date; var items: [Entry] }
+    private static let key = "homeRecommendations"
+    static let lifetime: TimeInterval = 3600
+
+    static func fresh() -> Saved? {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let saved = try? JSONDecoder().decode(Saved.self, from: data),
+              Date().timeIntervalSince(saved.date) < lifetime else { return nil }
+        return saved
+    }
+
+    static func save(_ items: [RecommendedTrackItem]) {
+        let saved = Saved(date: Date(), items: items.map { Entry(id: $0.track.id, tag: $0.badgeTag) })
+        if let data = try? JSONEncoder().encode(saved) { UserDefaults.standard.set(data, forKey: key) }
     }
 }
 
