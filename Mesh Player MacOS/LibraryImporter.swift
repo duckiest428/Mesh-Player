@@ -169,6 +169,7 @@ nonisolated enum TrackMetadataReader {
         var copyright: String?
         var publisher: String?
         var lyrics = ""
+        var explicit = false
 
         let items = (try? await asset.load(.metadata)) ?? []
         for item in items {
@@ -196,6 +197,8 @@ nonisolated enum TrackMetadataReader {
                 if let v = try? await item.load(.stringValue), !v.isEmpty { publisher = v }
             case .iTunesMetadataLyrics, .id3MetadataUnsynchronizedLyric:
                 if let v = try? await item.load(.stringValue), !v.isEmpty { lyrics = v }
+            case .iTunesMetadataContentRating:
+                explicit = await isExplicitRating(item)
             default:
                 break
             }
@@ -237,6 +240,7 @@ nonisolated enum TrackMetadataReader {
         track.trackNumber = trackNumber
         track.copyright = copyright
         track.publisher = publisher
+        track.isExplicit = explicit
         track.year = yearValue
         track.albumArtist = albumArtist
         track.bitRate = codec?.bitRate
@@ -248,6 +252,23 @@ nonisolated enum TrackMetadataReader {
 }
 
 extension TrackMetadataReader {
+    /// iTunes' "rtng" atom: 1 (and 4, used by older files) is explicit, 2 is clean.
+    static func isExplicitRating(_ item: AVMetadataItem) async -> Bool {
+        if let n = try? await item.load(.numberValue) { return n.intValue == 1 || n.intValue == 4 }
+        if let data = try? await item.load(.dataValue), let first = data.first { return first == 1 || first == 4 }
+        return false
+    }
+
+    /// Whether a file is tagged explicit.
+    static func isExplicit(_ url: URL) async -> Bool {
+        let asset = AVURLAsset(url: url)
+        guard let items = try? await asset.load(.metadata) else { return false }
+        for item in items where item.identifier == .iTunesMetadataContentRating {
+            return await isExplicitRating(item)
+        }
+        return false
+    }
+
     /// Reads just the copyright / ℗ line from a file's tags.
     static func copyright(of url: URL) async -> String? {
         let asset = AVURLAsset(url: url)
@@ -311,6 +332,25 @@ nonisolated final class CopyrightResolver: @unchecked Sendable {
             return itemArtist.contains(wantedArtist) || wantedArtist.contains(itemArtist)
         }
         return (exact ?? byArtist)?["copyright"] as? String
+    }
+
+    /// Reads the explicit tag of songs that haven't been checked yet (libraries imported before
+    /// it was read), off the main thread, and stores the results in one update.
+    @MainActor func backfillExplicit(_ state: AppStateManager) {
+        let pending = state.tracks.compactMap { t in t.isExplicit == nil ? t.fileURL.map { (t.id, $0) } : nil }
+        guard !pending.isEmpty else { return }
+        Task.detached(priority: .background) {
+            var flags: [UUID: Bool] = [:]
+            for chunkStart in stride(from: 0, to: pending.count, by: 24) {
+                let chunk = pending[chunkStart..<min(chunkStart + 24, pending.count)]
+                await withTaskGroup(of: (UUID, Bool).self) { group in
+                    for (id, url) in chunk { group.addTask { (id, await TrackMetadataReader.isExplicit(url)) } }
+                    for await (id, value) in group { flags[id] = value }
+                }
+            }
+            let result = flags
+            await MainActor.run { state.setExplicitFlags(result) }
+        }
     }
 
     /// Reads copyright tags for albums that don't have one yet, off the main thread, and
@@ -588,6 +628,7 @@ final class LibraryImporter: ObservableObject {
 
             let (added, updated, failed) = await self.processFiles(files, into: state, moveIntoLibrary: moveIntoLibrary)
             CopyrightResolver.shared.backfillFromTags(state)
+            CopyrightResolver.shared.backfillExplicit(state)
             if Task.isCancelled {
                 self.finish(ImportSummary(title: "Import cancelled", message: "Added \(added) songs before stopping.", isError: false))
             } else {
@@ -973,6 +1014,8 @@ final class LibraryImporter: ObservableObject {
                     if let v = try? await item.load(.stringValue), !v.isEmpty { track.publisher = v }
                 case .some(.iTunesMetadataLyrics), .some(.id3MetadataUnsynchronizedLyric):
                     if track.lyrics.isEmpty, let v = try? await item.load(.stringValue), !v.isEmpty { track.lyrics = v }
+                case .some(.iTunesMetadataContentRating):
+                    track.isExplicit = await TrackMetadataReader.isExplicitRating(item)
                 default:
                     break
                 }

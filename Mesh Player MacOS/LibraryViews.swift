@@ -525,6 +525,9 @@ private struct TitleCell: View {
                 .fontWeight(isCurrent ? .semibold : .regular)
                 .foregroundStyle(isCurrent ? theme.accent : theme.textPrimary)
                 .lineLimit(1)
+            if track.isExplicit == true {
+                ExplicitBadge(size: 10 * zoom, color: theme.textTertiary)
+            }
             if track.isAtmos {
                 DolbyAtmosBadge(color: theme.textSecondary, scale: 0.55 * zoom, showText: false)
             }
@@ -1047,6 +1050,11 @@ struct AlbumDetailView: View {
             catalog = AppleMusicCatalog.shared.cachedAlbum(named: title, artist: artist)
             let fetched = await AppleMusicCatalog.shared.album(named: title, artist: artist)
             if !Task.isCancelled, fetched != catalog { withAnimation(.easeOut(duration: 0.2)) { catalog = fetched } }
+            // Songs whose files carry no explicit tag get it from Apple Music.
+            if let items = fetched?.tracks, !items.isEmpty {
+                let matches = Self.matchCatalog(albumTracks, items)
+                state.setExplicitFlags(matches.filter { _, item in item.isExplicit }.mapValues { _ in true })
+            }
         }
         .sheet(isPresented: $showArtworkViewer) {
             if let rep = albumTracks.first {
@@ -1201,7 +1209,7 @@ private struct AlbumTrackRow: View {
                         .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
                         .foregroundStyle(isCurrent ? theme.accent : theme.textPrimary)
                         .lineLimit(1)
-                    if isExplicit {
+                    if isExplicit || track.isExplicit == true {
                         ExplicitBadge(size: 11, color: theme.textTertiary)
                     }
                     if track.isAtmos {

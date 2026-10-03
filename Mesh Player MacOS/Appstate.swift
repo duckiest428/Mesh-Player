@@ -47,6 +47,8 @@ nonisolated struct LocalTrack: Identifiable, Hashable, Codable {
     var albumArtist: String? = nil
     /// Apple Music persistent ID when the track came from the Music app library.
     var persistentID: String? = nil
+    /// From the file's content-rating tag or Apple Music; nil until checked.
+    var isExplicit: Bool? = nil
 
     var yearRecorded: Int? {
         get { year }
@@ -743,6 +745,7 @@ class AppStateManager: ObservableObject {
                     try? await Task.sleep(for: .seconds(4))
                     guard let self else { return }
                     CopyrightResolver.shared.backfillFromTags(self)
+                    CopyrightResolver.shared.backfillExplicit(self)
                 }
             }
         }
@@ -1205,6 +1208,20 @@ class AppStateManager: ObservableObject {
     }
 
     /// Batch version of `setCopyright` used by the background tag reader.
+    /// Stores explicit flags in one library update (only changes are written).
+    func setExplicitFlags(_ flags: [UUID: Bool]) {
+        guard !flags.isEmpty else { return }
+        var updated = tracks
+        var changed = false
+        for i in updated.indices {
+            if let value = flags[updated[i].id], updated[i].isExplicit != value {
+                updated[i].isExplicit = value
+                changed = true
+            }
+        }
+        if changed { tracks = updated }
+    }
+
     func setCopyrights(_ byAlbum: [String: String]) {
         var updated = tracks
         var changed = false
