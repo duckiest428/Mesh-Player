@@ -90,10 +90,13 @@ final class AmdlDownloader: NSObject, ObservableObject, WKNavigationDelegate, WK
     static let siteURL = URL(string: "https://am-dl.pages.dev")!
 
     enum Quality: String, CaseIterable, Identifiable {
+        /// Leaves am-dl's own quality setting alone and sends just the link.
+        case automatic = "auto"
         case aac = "off", alac = "alac", atmos = "atmos"
         var id: String { rawValue }
         var label: String {
             switch self {
+            case .automatic: return "Automatic"
             case .aac: return "AAC 256"
             case .alac: return "Lossless (ALAC)"
             case .atmos: return "Dolby Atmos"
@@ -133,7 +136,7 @@ final class AmdlDownloader: NSObject, ObservableObject, WKNavigationDelegate, WK
     private var destinations: [ObjectIdentifier: URL] = [:]
 
     private override init() {
-        quality = Quality(rawValue: UserDefaults.standard.string(forKey: "amdl.quality") ?? "") ?? .aac
+        quality = Quality(rawValue: UserDefaults.standard.string(forKey: "amdl.quality") ?? "") ?? .automatic
         super.init()
     }
 
@@ -192,16 +195,34 @@ final class AmdlDownloader: NSObject, ObservableObject, WKNavigationDelegate, WK
         submit(next)
     }
 
-    /// Fills in am-dl's form the way a person would: pick the quality, paste the link, press Archive.
+    /// Waits for am-dl to finish loading (its button ignores clicks until then — which used to leave
+    /// jobs stuck at "Ready."), then fills in the form.
     private func submit(_ job: Job) {
+        Task { [weak self] in
+            let probe = "(function(){ const b = document.querySelector('#fetch-button'); const s = ((document.querySelector('#status') || {}).textContent || '').toLowerCase(); return !!b && !b.disabled && !s.includes('loading'); })();"
+            for _ in 0..<40 {
+                guard let self, self.activeJobId == job.id else { return }
+                if (try? await self.webView.evaluateJavaScript(probe)) as? Bool == true { break }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            self?.fill(job)
+        }
+    }
+
+    /// Fills in am-dl's form the way a person would: pick the quality, paste the link, press Archive.
+    private func fill(_ job: Job) {
+        guard activeJobId == job.id else { return }
         let link = job.item.appleMusicURL.absoluteString.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
         let js = """
         (function() {
           const input = document.querySelector('#urlInput');
           const button = document.querySelector('#fetch-button');
           if (!input || !button) return 'missing';
-          const mode = document.querySelector('.url-mode-option[data-mode="\(job.quality.rawValue)"]');
-          if (mode && !mode.classList.contains('is-active')) mode.click();
+          const wanted = '\(job.quality == .automatic ? "" : job.quality.rawValue)';
+          if (wanted) {
+            const mode = document.querySelector('.url-mode-option[data-mode="' + wanted + '"]');
+            if (mode && !mode.classList.contains('is-active')) mode.click();
+          }
           const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
           setter.call(input, '\(link)');
           input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -230,6 +251,7 @@ final class AmdlDownloader: NSObject, ObservableObject, WKNavigationDelegate, WK
             let started = Date()
             var lastStatus = ""
             var unchangedSince = Date()
+            var retries = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, self.activeJobId == id else { return }
@@ -258,6 +280,12 @@ final class AmdlDownloader: NSObject, ObservableObject, WKNavigationDelegate, WK
                 if lower.contains("error") || lower.contains("failed") || lower.contains("invalid") || lower.contains("not available") {
                     self.finish(id, .failed(status))
                     return
+                }
+                // Still idle with the link in the box: am-dl missed the click, so press Archive again.
+                if lower.hasPrefix("ready") && self.finishedFiles.isEmpty && retries < 3 && Date().timeIntervalSince(unchangedSince) > 5 {
+                    retries += 1
+                    unchangedSince = Date()
+                    _ = try? await self.webView.evaluateJavaScript("(function(){ const b = document.querySelector('#fetch-button'); const i = document.querySelector('#urlInput'); if (b && !b.disabled && i && i.value) { b.click(); return true } return false })();")
                 }
                 let text = [title, status].filter { !$0.isEmpty }.joined(separator: " · ")
                 self.update(id, .processing(text.isEmpty ? "Processing…" : text), progress: pct >= 0 ? pct / 100 : nil)
@@ -540,7 +568,11 @@ struct GetMusicView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
                 .onSubmit(runSearch)
-                .onChange(of: query) { _, _ in scheduleSearch() }
+                .onChange(of: query) { _, _ in
+                    // Pasted links download with Automatic quality unless changed afterwards.
+                    if linkItem != nil { downloader.quality = .automatic }
+                    scheduleSearch()
+                }
             if isSearching { ProgressView().controlSize(.small) }
             if !query.isEmpty {
                 Button {
