@@ -1724,6 +1724,9 @@ struct HomeView: View {
     /// Picks songs for "From Your Library". Every pick is labelled with the real reason it was
     /// chosen — play counts, favorites, dates, your listening history, or (when online) Apple
     /// Music's top songs for your most played artists. Nothing is invented.
+    ///
+    /// For variety: each reason gives at most two songs, each artist and album appears once,
+    /// and songs shown in the last few refreshes are left out while there are others to pick.
     private func generateRecommendations() {
         let now = Date()
         let cal = Calendar.current
@@ -1731,35 +1734,49 @@ struct HomeView: View {
         guard !library.isEmpty else { recommendedItems = []; return }
         func item(_ track: LocalTrack, _ tag: String) -> RecommendedTrackItem { RecommendedTrackItem(track: track, badgeTag: tag) }
         func plural(_ n: Int, _ word: String) -> String { "\(Fmt.count(n)) \(word)\(n == 1 ? "" : "s")" }
+        let byId = Dictionary(library.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
 
         var pools: [[RecommendedTrackItem]] = []
 
-        // Your most played songs and favorites.
-        pools.append(library.filter { $0.playCount >= 3 }.sorted { $0.playCount > $1.playCount }.prefix(40).shuffled()
-            .map { item($0, "Played \(plural($0.playCount, "time"))") })
+        // Your most played songs (from a wide pool, so it isn't always the same top few) and favorites.
+        let mostPlayed = library.filter { $0.playCount >= 3 }.sorted { $0.playCount > $1.playCount }.prefix(200)
+        pools.append(mostPlayed.shuffled().map { item($0, "Played \(plural($0.playCount, "time"))") })
         pools.append(library.filter(\.isFavorite).shuffled().map { item($0, "In your Favorites") })
+        // Favorites you haven't played in a while.
+        pools.append(library.filter { t in
+            guard t.isFavorite, let last = t.lastPlayedDate else { return false }
+            return now.timeIntervalSince(last) > 30 * 86_400
+        }.shuffled().map { item($0, "A favorite, last played \(Fmt.relative($0.lastPlayedDate ?? now))") })
 
-        // On repeat this week (from the play history).
+        // From the play history: on repeat this week, and more by the artists you've played this week.
         let weekAgo = now.addingTimeInterval(-7 * 86_400)
         var weekCounts: [UUID: Int] = [:]
         for entry in state.playHistoryLog where entry.timestamp >= weekAgo { weekCounts[entry.trackId, default: 0] += 1 }
-        let byId = Dictionary(library.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         pools.append(weekCounts.filter { $0.value >= 2 }.compactMap { id, n in byId[id].map { item($0, "Played \(plural(n, "time")) this week") } }.shuffled())
+        let weekArtists = Set(weekCounts.keys.compactMap { byId[$0].map { state.displayArtist($0.artist) } })
+        pools.append(weekArtists.shuffled().prefix(8).compactMap { artist in
+            library.filter { state.displayArtist($0.artist) == artist && weekCounts[$0.id] == nil }.randomElement()
+                .map { item($0, "Because you played \(artist) this week") }
+        })
 
-        // New and not played yet; played a lot but not lately.
+        // New and not played yet; never played at all; played a lot but not lately; barely played.
         pools.append(library.filter { $0.playCount == 0 && now.timeIntervalSince($0.dateAdded) < 60 * 86_400 }.shuffled()
             .map { item($0, "Added \(Fmt.relative($0.dateAdded)) · not played yet") })
+        pools.append(library.filter { $0.playCount == 0 && now.timeIntervalSince($0.dateAdded) >= 60 * 86_400 }.shuffled().prefix(60)
+            .map { item($0, "In your library since \($0.dateAdded.formatted(.dateTime.month(.wide).year())) · never played") })
         pools.append(library.filter { t in
             guard t.playCount >= 3, let last = t.lastPlayedDate else { return false }
             return now.timeIntervalSince(last) > 60 * 86_400
         }.shuffled().map { item($0, "Last played \(Fmt.relative($0.lastPlayedDate ?? now))") })
+        pools.append(library.filter { (1...2).contains($0.playCount) && now.timeIntervalSince($0.lastPlayedDate ?? .distantPast) > 14 * 86_400 }.shuffled().prefix(60)
+            .map { item($0, "Played only \(plural($0.playCount, "time"))") })
 
         // Deeper cuts by the artists you play most.
         var artistPlays: [String: Int] = [:]
         for t in library { artistPlays[state.displayArtist(t.artist), default: 0] += t.playCount }
-        let topArtists = artistPlays.filter { $0.value >= 5 }.sorted { $0.value > $1.value }.prefix(6)
+        let topArtists = artistPlays.filter { $0.value >= 5 }.sorted { $0.value > $1.value }.prefix(15).shuffled().prefix(6)
         pools.append(topArtists.flatMap { artist, plays in
-            library.filter { state.displayArtist($0.artist) == artist && $0.playCount <= 1 }.shuffled().prefix(3)
+            library.filter { state.displayArtist($0.artist) == artist && $0.playCount <= 1 }.shuffled().prefix(2)
                 .map { item($0, "You've played \(artist) \(plural(plays, "time"))") }
         }.shuffled())
 
@@ -1788,12 +1805,24 @@ struct HomeView: View {
             return (thisYear - year) % 10 == 0
         }.shuffled().prefix(20).map { t in item(t, "Released \(thisYear - (t.year ?? thisYear)) years ago, in \(t.year ?? thisYear)") })
 
-        // Genres your favorites come from.
+        // A random decade of your library.
+        var decades: [Int: [LocalTrack]] = [:]
+        for t in library { if let year = t.year, year > 1900 { decades[year / 10 * 10, default: []].append(t) } }
+        if let (decade, songs) = decades.filter({ $0.value.count >= 8 }).randomElement() {
+            let label = decade >= 2000 ? "\(decade)s" : "’\(String(decade).suffix(2))s"
+            pools.append(songs.shuffled().prefix(6).map { item($0, "From the \(label) in your library") })
+        }
+
+        // Genres: what your favorites come from, and more like what you played last.
         var favoriteGenres: [String: Int] = [:]
         for t in library where t.isFavorite && !t.genre.isEmpty { favoriteGenres[t.genre, default: 0] += 1 }
         if let (genre, count) = favoriteGenres.filter({ $0.value >= 3 }).randomElement() {
             pools.append(library.filter { $0.genre == genre && !$0.isFavorite && $0.playCount <= 2 }.shuffled().prefix(6)
                 .map { item($0, "\(genre) — the genre of \(count) of your favorites") })
+        }
+        if let lastId = state.playHistoryLog.last?.trackId, let last = byId[lastId], !last.genre.isEmpty, last.genre != "Unknown Genre" {
+            pools.append(library.filter { $0.genre == last.genre && state.displayArtist($0.artist) != state.displayArtist(last.artist) }.shuffled().prefix(6)
+                .map { item($0, "\(last.genre), like \(last.title)") })
         }
 
         // Online: Apple Music's top songs for your top artists, when they're in your library.
@@ -1801,32 +1830,44 @@ struct HomeView: View {
 
         pools = pools.filter { !$0.isEmpty }.shuffled()
 
-        // Round-robin across the reasons, one song per album, for a varied grid.
+        // Songs shown in the last few refreshes wait their turn, unless the library is too small.
+        let recent = RecommendationCache.recentlyShown()
+        let target = 12
         var results: [RecommendedTrackItem] = []
-        var seenAlbums = Set<String>()
-        var seenTracks = Set<UUID>()
-        while results.count < 12 && !pools.isEmpty {
-            for i in pools.indices.reversed() {
-                guard results.count < 12 else { break }
-                while let next = pools[i].first {
-                    pools[i].removeFirst()
-                    if seenTracks.insert(next.track.id).inserted && seenAlbums.insert(state.albumKey(for: next.track)).inserted {
+        var seenAlbums = Set<String>(), seenArtists = Set<String>(), seenTracks = Set<UUID>()
+        for allowRecent in [false, true] where results.count < target {
+            var remaining = pools.map { $0.filter { allowRecent || !recent.contains($0.track.id) } }
+            var taken = Array(repeating: 0, count: remaining.count)
+            var progressed = true
+            while results.count < target && progressed {
+                progressed = false
+                for i in remaining.indices.shuffled() where results.count < target && taken[i] < 2 {
+                    while let next = remaining[i].first {
+                        remaining[i].removeFirst()
+                        let artist = state.displayArtist(next.track.artist)
+                        guard !seenTracks.contains(next.track.id),
+                              !seenAlbums.contains(state.albumKey(for: next.track)),
+                              !seenArtists.contains(artist) else { continue }
+                        seenTracks.insert(next.track.id)
+                        seenAlbums.insert(state.albumKey(for: next.track))
+                        seenArtists.insert(artist)
                         results.append(next)
+                        taken[i] += 1
+                        progressed = true
                         break
                     }
                 }
-                if pools[i].isEmpty { pools.remove(at: i) }
             }
         }
         // Small libraries: fill up with songs from albums not shown yet, labelled plainly.
-        if results.count < 12 {
-            for track in library.shuffled() where results.count < 12 && seenAlbums.insert(state.albumKey(for: track)).inserted {
+        if results.count < target {
+            for track in library.shuffled() where results.count < target && !recent.contains(track.id) && seenAlbums.insert(state.albumKey(for: track)).inserted {
                 let tag = track.playCount > 0 ? "Played \(plural(track.playCount, "time"))" : "Added \(Fmt.relative(track.dateAdded))"
                 results.append(item(track, tag))
             }
         }
-        recommendedItems = results
-        RecommendationCache.save(results)
+        recommendedItems = results.shuffled()
+        RecommendationCache.save(recommendedItems)
     }
 
     /// Track id → "#2 of Kanye West's top songs on Apple Music", for songs in the library that are
@@ -1867,6 +1908,15 @@ enum RecommendationCache {
     static func save(_ items: [RecommendedTrackItem]) {
         let saved = Saved(date: Date(), items: items.map { Entry(id: $0.track.id, tag: $0.badgeTag) })
         if let data = try? JSONEncoder().encode(saved) { UserDefaults.standard.set(data, forKey: key) }
+        // Remember the last four refreshes' songs so the next picks are different ones.
+        let recent = items.map(\.track.id.uuidString) + (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
+        UserDefaults.standard.set(Array(recent.prefix(48)), forKey: recentKey)
+    }
+
+    private static let recentKey = "homeRecommendations.recent"
+
+    static func recentlyShown() -> Set<UUID> {
+        Set((UserDefaults.standard.stringArray(forKey: recentKey) ?? []).compactMap(UUID.init(uuidString:)))
     }
 }
 
