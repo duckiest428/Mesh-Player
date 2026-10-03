@@ -24,6 +24,8 @@ nonisolated struct CatalogAlbumInfo: Codable, Hashable, Sendable, Identifiable {
     var isSingle: Bool? = nil
     /// The album's full track list on Apple Music (nil until looked up).
     var tracks: [CatalogTrackInfo]? = nil
+    /// The shelves at the bottom of Apple Music's album page (nil until looked up).
+    var related: CatalogAlbumRelated? = nil
 
     var year: String? { releaseDate.map { String($0.prefix(4)) } }
     var isExplicit: Bool { contentRating == "explicit" }
@@ -45,6 +47,27 @@ nonisolated struct CatalogAlbumInfo: Codable, Hashable, Sendable, Identifiable {
         if name.hasSuffix(" - EP") { return "EP" }
         return "Album"
     }
+}
+
+/// An album or playlist on one of Apple Music's shelves.
+nonisolated struct CatalogShelfItem: Codable, Hashable, Sendable, Identifiable {
+    enum Kind: String, Codable, Sendable { case album, playlist }
+    var id: String
+    var kind: Kind
+    var name: String
+    /// The artist for albums, the curator for playlists.
+    var subtitle: String
+    var artworkTemplate: String?
+    var url: String?
+    var isExplicit: Bool = false
+
+    func artworkURL(_ size: Int) -> URL? { AppleMusicCatalog.imageURL(artworkTemplate, size: size) }
+}
+
+nonisolated struct CatalogAlbumRelated: Codable, Hashable, Sendable {
+    var moreByArtist: [CatalogShelfItem] = []
+    var featuredOn: [CatalogShelfItem] = []
+    var youMightAlsoLike: [CatalogShelfItem] = []
 }
 
 nonisolated struct CatalogTrackInfo: Codable, Hashable, Sendable, Identifiable {
@@ -122,8 +145,8 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
 
     func album(named album: String, artist: String) async -> CatalogAlbumInfo? {
         let key = Self.albumKey(album, artist)
-        // Entries cached before track lists were looked up are refreshed once.
-        if let hit = lock.withLock({ cache.albums[key] }), hit.isFresh, hit.value == nil || hit.value?.tracks != nil { return hit.value }
+        // Entries cached before track lists and shelves were looked up are refreshed once.
+        if let hit = lock.withLock({ cache.albums[key] }), hit.isFresh, hit.value == nil || (hit.value?.tracks != nil && hit.value?.related != nil) { return hit.value }
         await once("album:" + key) { [self] in
             let found = await lookUpAlbum(album, artist: artist)
             lock.withLock { cache.albums[key] = Stamped(value: found, checked: Date()) }
@@ -182,14 +205,36 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
         }
         guard var found = best(sameArtist.filter { $0.name.caseInsensitiveCompare(album) == .orderedSame })
                 ?? best(sameArtist.filter { AnimatedArtworkService.normalize($0.name).caseInsensitiveCompare(clean) == .orderedSame }) else { return nil }
-        if let detail = await get("albums/\(found.id)", query: ["include": "tracks"]),
+        if let detail = await get("albums/\(found.id)", query: ["include": "tracks", "views": "more-by-artist,appears-on,you-might-also-like"]),
            let data = (detail["data"] as? [[String: Any]])?.first {
             let tracks = ((data["relationships"] as? [String: Any])?["tracks"] as? [String: Any])?["data"] as? [[String: Any]] ?? []
             found.tracks = tracks.compactMap(Self.track(from:))
+            let views = data["views"] as? [String: Any]
+            func shelf(_ name: String) -> [CatalogShelfItem] {
+                ((views?[name] as? [String: Any])?["data"] as? [[String: Any]] ?? []).compactMap(Self.shelfItem(from:))
+            }
+            found.related = CatalogAlbumRelated(moreByArtist: shelf("more-by-artist"), featuredOn: shelf("appears-on"), youMightAlsoLike: shelf("you-might-also-like"))
         } else {
             found.tracks = []
+            found.related = CatalogAlbumRelated()
         }
         return found
+    }
+
+    private static func shelfItem(from item: [String: Any]) -> CatalogShelfItem? {
+        guard let id = item["id"] as? String,
+              let attributes = item["attributes"] as? [String: Any],
+              let name = attributes["name"] as? String else { return nil }
+        let isPlaylist = (item["type"] as? String) == "playlists"
+        return CatalogShelfItem(
+            id: id,
+            kind: isPlaylist ? .playlist : .album,
+            name: name,
+            subtitle: (isPlaylist ? attributes["curatorName"] : attributes["artistName"]) as? String ?? "",
+            artworkTemplate: (attributes["artwork"] as? [String: Any])?["url"] as? String,
+            url: attributes["url"] as? String,
+            isExplicit: attributes["contentRating"] as? String == "explicit"
+        )
     }
 
     private static func track(from item: [String: Any]) -> CatalogTrackInfo? {

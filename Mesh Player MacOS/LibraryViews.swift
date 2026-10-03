@@ -731,6 +731,51 @@ struct AlbumDetailView: View {
 
     /// Pairs local songs with the album's Apple Music tracks: by title first (ignoring case,
     /// accents and "(feat. …)" parts), then by disc and track number.
+    private func catalogShelf(_ title: String, _ items: [CatalogShelfItem], _ theme: ThemeColor, seeAll: (() -> Void)? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // SectionHeader brings 28pt of its own; the cards start at 36.
+            SectionHeader(title: title, theme: theme, action: seeAll)
+                .padding(.horizontal, 8)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 18) {
+                    ForEach(items) { item in
+                        CatalogShelfCell(item: item, theme: theme, inLibrary: localAlbumKey(for: item) != nil) {
+                            open(item)
+                        }
+                    }
+                }
+                .padding(.horizontal, 36)
+                .padding(.vertical, 12)
+            }
+        }
+        .padding(.top, 30)
+    }
+
+    /// The library album matching a shelf album, by title and artist.
+    private func localAlbumKey(for item: CatalogShelfItem) -> String? {
+        guard item.kind == .album else { return nil }
+        let wanted = AnimatedArtworkService.normalize(item.name.replacingOccurrences(of: " - Single", with: "").replacingOccurrences(of: " - EP", with: ""))
+        return state.albumsList.first {
+            AnimatedArtworkService.normalize($0.name).caseInsensitiveCompare(wanted) == .orderedSame
+                && AnimatedArtworkService.artistsMatch($0.artist, item.subtitle)
+        }?.key
+    }
+
+    /// Albums you have open in the library, others in Get Music; playlists open in Apple Music.
+    private func open(_ item: CatalogShelfItem) {
+        switch item.kind {
+        case .album:
+            if let key = localAlbumKey(for: item) {
+                state.showAlbum(key)
+            } else {
+                state.getMusicQuery = "\(item.name) \(item.subtitle)"
+                state.selectedTab = "getMusic"
+            }
+        case .playlist:
+            if let link = item.url, let url = URL(string: link) { NSWorkspace.shared.open(url) }
+        }
+    }
+
     static func matchCatalog(_ tracks: [LocalTrack], _ catalog: [CatalogTrackInfo]) -> [UUID: CatalogTrackInfo] {
         func key(_ title: String) -> String {
             title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
@@ -1023,27 +1068,41 @@ struct AlbumDetailView: View {
                 .padding(.horizontal, 36)
                 .padding(.top, 20)
 
-                // More by the artist
-                let others = state.albumsList.filter { $0.artist == albumArtist && $0.key != albumName }
-                if !others.isEmpty {
-                    SectionHeader(title: "More by \(albumArtist)", theme: theme) {
+                // Apple Music's shelves, as at the bottom of its album pages. Without them (offline,
+                // or not on Apple Music), the artist's other albums in your library.
+                let related = catalog?.related
+                if let moreBy = related?.moreByArtist, !moreBy.isEmpty {
+                    catalogShelf("More By \(catalog?.artist ?? albumArtist)", moreBy, theme) {
                         state.showArtist(rep?.artist ?? albumArtist)
                     }
-                    .padding(.top, 36)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(alignment: .top, spacing: 18) {
-                            ForEach(others) { album in
-                                AlbumCell(album: album, theme: theme, subtitle: album.yearRecorded.map(String.init) ?? "Album") {
-                                    state.showAlbum(album.key)
-                                } onPlay: {
-                                    state.play(state.albumTracks(named: album.key), engine: engine)
-                                }
-                                .frame(width: 190)
-                            }
+                } else {
+                    let others = state.albumsList.filter { $0.artist == albumArtist && $0.key != albumName }
+                    if !others.isEmpty {
+                        SectionHeader(title: "More by \(albumArtist)", theme: theme) {
+                            state.showArtist(rep?.artist ?? albumArtist)
                         }
-                        .padding(.horizontal, 36)
-                        .padding(.vertical, 12)
+                        .padding(.top, 36)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 18) {
+                                ForEach(others) { album in
+                                    AlbumCell(album: album, theme: theme, subtitle: album.yearRecorded.map(String.init) ?? "Album") {
+                                        state.showAlbum(album.key)
+                                    } onPlay: {
+                                        state.play(state.albumTracks(named: album.key), engine: engine)
+                                    }
+                                    .frame(width: 190)
+                                }
+                            }
+                            .padding(.horizontal, 36)
+                            .padding(.vertical, 12)
+                        }
                     }
+                }
+                if let featured = related?.featuredOn, !featured.isEmpty {
+                    catalogShelf("Featured On", featured, theme)
+                }
+                if let similar = related?.youMightAlsoLike, !similar.isEmpty {
+                    catalogShelf("You Might Also Like", similar, theme)
                 }
             }
             .padding(.bottom, 40)
@@ -1109,6 +1168,63 @@ struct AlbumDetailView: View {
 }
 
 /// A song from the album that isn't in the library, with a button to get it through am-dl.
+/// An album or playlist on an Apple Music shelf at the bottom of an album page.
+private struct CatalogShelfCell: View {
+    let item: CatalogShelfItem
+    let theme: ThemeColor
+    let inLibrary: Bool
+    let onOpen: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            AsyncImage(url: item.artworkURL(400)) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                ArtworkPlaceholder(seed: item.name, symbol: item.kind == .playlist ? "music.note.list" : "music.note")
+            }
+            .frame(width: 180, height: 180)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(theme.hairline, lineWidth: 0.5)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if item.kind == .album && !inLibrary && hovering {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 22))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, theme.accent)
+                        .padding(8)
+                        .transition(.opacity)
+                }
+            }
+            .shadow(color: .black.opacity(theme.isDark ? 0.3 : 0.1), radius: 8, y: 4)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(item.name.replacingOccurrences(of: " - Single", with: ""))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(2)
+                    if item.isExplicit {
+                        ExplicitBadge(size: 10, color: theme.textTertiary)
+                    }
+                }
+                Text(item.subtitle)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: 180, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .hoverLift(1.02)
+        .help(item.kind == .playlist ? "Open in Apple Music" : (inLibrary ? "Open album" : "Not in your library — opens Get Music"))
+    }
+}
+
 private struct MissingTrackRow: View {
     let item: CatalogTrackInfo
     let number: Int
