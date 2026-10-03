@@ -1203,12 +1203,10 @@ struct FullLyricsList: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 30) {
-                    let activeIndex = engine.parsedLyrics.firstIndex { $0.id == activeLineId } ?? 0
-                    ForEach(Array(engine.parsedLyrics.enumerated()), id: \.element.id) { index, line in
+                    ForEach(engine.parsedLyrics) { line in
                         LyricLineView(
                             line: line,
                             isActive: activeLineId == line.id,
-                            distance: abs(index - activeIndex),
                             translation: translations[line.id],
                             engine: engine,
                             onSeek: { engine.seek(to: $0) }
@@ -1244,8 +1242,6 @@ struct FullLyricsList: View {
 struct LyricLineView: View, Equatable {
     let line: SyncedLyricLine
     let isActive: Bool
-    /// Lines further from the one being sung are softer, like Apple Music.
-    var distance: Int = 0
     /// Experimental: the line in your language, shown under it.
     var translation: String? = nil
     /// Break dots and word-synced lines animate themselves from the engine; other lines never
@@ -1255,7 +1251,7 @@ struct LyricLineView: View, Equatable {
     @State private var isHovered = false
 
     static func == (lhs: LyricLineView, rhs: LyricLineView) -> Bool {
-        lhs.line.id == rhs.line.id && lhs.isActive == rhs.isActive && lhs.distance == rhs.distance && lhs.translation == rhs.translation
+        lhs.line.id == rhs.line.id && lhs.isActive == rhs.isActive && lhs.translation == rhs.translation
     }
 
     private static let adlibRegex = try? NSRegularExpression(pattern: "(\\(.*?\\)|\\[.*?\\])", options: [])
@@ -1280,7 +1276,7 @@ struct LyricLineView: View, Equatable {
     var body: some View {
         Group {
             if line.isBreak {
-                InstrumentalBreakDots(engine: engine, breakStart: line.breakStart, breakEnd: line.breakEnd)
+                InstrumentalBreakDots(engine: engine, breakStart: line.breakStart, breakEnd: line.breakEnd, isActive: isActive)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 let parsed = parseAdlibs(from: line.text)
@@ -1308,7 +1304,7 @@ struct LyricLineView: View, Equatable {
                             .padding(.top, 2)
                     }
                 }
-                .blur(radius: isActive || isHovered ? 0 : min(CGFloat(distance), 5) * 0.45 + 0.3)
+                .blur(radius: isActive ? 0 : 0.6)
                 .scaleEffect(isActive ? 1.03 : 1.0, anchor: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1376,7 +1372,7 @@ struct SungLineView: View {
     var fontSize: CGFloat = 30
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: !engine.isPlaying)) { _ in
+        TimelineView(.animation(minimumInterval: 1 / 60, paused: !engine.isPlaying)) { _ in
             let time = engine.preciseCurrentTime
             LyricWordsLayout(wordSpacing: fontSize * 0.26, lineSpacing: fontSize * 0.12) {
                 ForEach(Array(words.enumerated()), id: \.offset) { _, word in
@@ -1403,19 +1399,22 @@ private struct SungWord: View {
         let feather = 0.35
         let edge = -feather + progress * (1 + 2 * feather)
 
+        // Only the word being sung needs the gradient; sung and unsung words are plain text.
         Text(text)
             .font(.system(size: fontSize, weight: .bold))
-            .foregroundStyle(.white.opacity(0.3))
+            .foregroundStyle(.white.opacity(progress >= 1 ? 1 : 0.3))
             .overlay {
-                Text(text)
-                    .font(.system(size: fontSize, weight: .bold))
-                    .foregroundStyle(.white)
-                    .mask(
-                        LinearGradient(colors: [.white, .white.opacity(0)],
-                                       startPoint: UnitPoint(x: edge - feather, y: 0.5),
-                                       endPoint: UnitPoint(x: edge + feather, y: 0.5))
-                    )
-                    .shadow(color: .white.opacity(0.55 * swell), radius: 9 * swell)
+                if progress > 0 && progress < 1 {
+                    Text(text)
+                        .font(.system(size: fontSize, weight: .bold))
+                        .foregroundStyle(.white)
+                        .mask(
+                            LinearGradient(colors: [.white, .white.opacity(0)],
+                                           startPoint: UnitPoint(x: edge - feather, y: 0.5),
+                                           endPoint: UnitPoint(x: edge + feather, y: 0.5))
+                        )
+                        .shadow(color: .white.opacity(emphasized ? 0.55 * swell : 0), radius: emphasized ? 9 * swell : 0)
+                }
             }
             .scaleEffect(1 + 0.09 * swell, anchor: .bottom)
             .offset(y: lift)
