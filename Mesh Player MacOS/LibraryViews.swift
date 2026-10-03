@@ -640,7 +640,7 @@ struct AnimatedEQView: View {
     private static let bars: [(speed: Double, offset: Double)] = [(5.1, 0.0), (6.7, 1.7), (4.3, 3.1), (5.9, 4.6)]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: !isPlaying)) { context in
+        TimelineView(.animation(minimumInterval: 1 / 20, paused: !isPlaying)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             Canvas { canvas, size in
                 let count = Self.bars.count
@@ -1098,9 +1098,6 @@ struct AlbumDetailView: View {
                             .padding(.vertical, 12)
                         }
                     }
-                }
-                if let featured = related?.featuredOn, !featured.isEmpty {
-                    catalogShelf("Featured On", featured, theme)
                 }
                 if let similar = related?.youMightAlsoLike, !similar.isEmpty {
                     catalogShelf("You Might Also Like", similar, theme)
@@ -1778,7 +1775,7 @@ struct LyricsSidebarView: View {
                                 let isActive = line.id == activeLineId
                                 Group {
                                     if line.isBreak {
-                                        InstrumentalBreakDots(engine: engine, breakStart: line.breakStart, breakEnd: line.breakEnd)
+                                        InstrumentalBreakDots(engine: engine, breakStart: line.breakStart, breakEnd: line.breakEnd, isActive: isActive)
                                             .scaleEffect(0.6, anchor: .leading)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     } else {

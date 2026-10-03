@@ -205,7 +205,7 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
         }
         guard var found = best(sameArtist.filter { $0.name.caseInsensitiveCompare(album) == .orderedSame })
                 ?? best(sameArtist.filter { AnimatedArtworkService.normalize($0.name).caseInsensitiveCompare(clean) == .orderedSame }) else { return nil }
-        if let detail = await get("albums/\(found.id)", query: ["include": "tracks", "views": "more-by-artist,appears-on,you-might-also-like"]),
+        if let detail = await get("albums/\(found.id)", query: ["include": "tracks", "views": "more-by-artist,you-might-also-like"]),
            let data = (detail["data"] as? [[String: Any]])?.first {
             let tracks = ((data["relationships"] as? [String: Any])?["tracks"] as? [String: Any])?["data"] as? [[String: Any]] ?? []
             found.tracks = tracks.compactMap(Self.track(from:))
@@ -213,7 +213,7 @@ nonisolated final class AppleMusicCatalog: @unchecked Sendable {
             func shelf(_ name: String) -> [CatalogShelfItem] {
                 ((views?[name] as? [String: Any])?["data"] as? [[String: Any]] ?? []).compactMap(Self.shelfItem(from:))
             }
-            found.related = CatalogAlbumRelated(moreByArtist: shelf("more-by-artist"), featuredOn: shelf("appears-on"), youMightAlsoLike: shelf("you-might-also-like"))
+            found.related = CatalogAlbumRelated(moreByArtist: shelf("more-by-artist"), youMightAlsoLike: shelf("you-might-also-like"))
         } else {
             found.tracks = []
             found.related = CatalogAlbumRelated()
